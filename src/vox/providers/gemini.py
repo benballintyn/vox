@@ -24,7 +24,12 @@ from ..errors import (
 )
 from ..models.config import ProviderConfig
 from ..models.messages import ImageContent, Message, TextContent, ToolCallData
-from ..models.reasoning import ReasoningConfig, ThinkingBlock
+from ..models.reasoning import (
+    LEVEL_TO_BUDGET_TOKENS,
+    LEVEL_TO_GEMINI3_LEVEL,
+    ReasoningConfig,
+    ThinkingBlock,
+)
 from ..models.responses import CompletionResponse, StreamChunk, Usage
 from ..models.tools import Tool
 from .base import Provider
@@ -211,6 +216,7 @@ class GeminiProvider(Provider):
     def _build_generate_config(
         self,
         *,
+        model: str,
         max_tokens: int,
         temperature: float,
         response_schema: type[BaseModel] | None,
@@ -221,6 +227,8 @@ class GeminiProvider(Provider):
         """Build a GenerateContentConfig for the request.
 
         Args:
+            model: Model identifier (used to detect Gemini 2.5 vs 3 for
+                thinking config translation).
             max_tokens: Max output tokens.
             temperature: Sampling temperature.
             response_schema: Pydantic model for structured output.
@@ -246,31 +254,49 @@ class GeminiProvider(Provider):
             config_kwargs["response_schema"] = pydantic_to_gemini_schema(response_schema)
 
         if reasoning and reasoning.enabled:
-            thinking_config = self._build_thinking_config(reasoning)
+            thinking_config = self._build_thinking_config(reasoning, model)
             if thinking_config:
                 config_kwargs["thinking_config"] = thinking_config
 
         config_kwargs.update(kwargs)
         return types.GenerateContentConfig(**config_kwargs)
 
-    def _build_thinking_config(self, reasoning: ReasoningConfig) -> Any | None:
+    def _build_thinking_config(self, reasoning: ReasoningConfig, model: str) -> Any | None:
         """Build Gemini thinking config from ReasoningConfig.
+
+        Translation rules (in priority order):
+            1. ``reasoning.gemini`` overrides — use exactly what the user provides.
+            2. ``reasoning.level`` semantic mapping:
+               - Gemini 3+ models: map level → ``thinking_level``.
+               - Gemini 2.5 (and others): map level → ``thinking_budget``.
 
         Args:
             reasoning: The reasoning configuration.
+            model: Model identifier for version detection.
 
         Returns:
             A ThinkingConfig instance or None.
         """
         types = _import_genai_types()
+        is_gemini3 = model.startswith("gemini-3")
 
-        if reasoning.budget_tokens:
-            return types.ThinkingConfig(thinking_budget=reasoning.budget_tokens)
+        # Provider-specific overrides take priority
+        if reasoning.gemini:
+            cfg_kwargs: dict[str, Any] = {}
+            if reasoning.gemini.budget_tokens is not None:
+                cfg_kwargs["thinking_budget"] = reasoning.gemini.budget_tokens
+            if reasoning.gemini.level is not None:
+                cfg_kwargs["thinking_level"] = reasoning.gemini.level.upper()
+            if cfg_kwargs:
+                return types.ThinkingConfig(**cfg_kwargs)
 
         if reasoning.level:
-            return types.ThinkingConfig(thinking_budget=-1)
+            if is_gemini3:
+                mapped = LEVEL_TO_GEMINI3_LEVEL[reasoning.level]
+                return types.ThinkingConfig(thinking_level=mapped.upper())
+            return types.ThinkingConfig(thinking_budget=LEVEL_TO_BUDGET_TOKENS[reasoning.level])
 
-        return types.ThinkingConfig(thinking_budget=8192)
+        return None
 
     # ── Response translation ─────────────────────────────────────────────
 
@@ -455,6 +481,7 @@ class GeminiProvider(Provider):
         resolved_model = self._resolve_model(model)
         contents, system_instruction = self._translate_contents(messages)
         config = self._build_generate_config(
+            model=resolved_model,
             max_tokens=max_tokens,
             temperature=temperature,
             response_schema=response_schema,
@@ -516,6 +543,7 @@ class GeminiProvider(Provider):
         resolved_model = self._resolve_model(model)
         contents, system_instruction = self._translate_contents(messages)
         config = self._build_generate_config(
+            model=resolved_model,
             max_tokens=max_tokens,
             temperature=temperature,
             response_schema=response_schema,

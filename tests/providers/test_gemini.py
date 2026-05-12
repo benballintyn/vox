@@ -155,3 +155,77 @@ class TestStreamChunkTranslation:
         chunk.candidates = []
         result = provider._translate_stream_chunk(chunk)
         assert result == []
+
+
+class TestReasoningTranslation:
+    """Tests for Gemini ReasoningConfig translation.
+
+    These tests patch the genai types to avoid requiring the real SDK to
+    accept arbitrary fields on ThinkingConfig.
+    """
+
+    @patch("vox.providers.gemini._import_genai_types")
+    def test_gemini25_uses_thinking_budget_from_level(
+        self, mock_types, provider: GeminiProvider
+    ) -> None:
+        """For Gemini 2.5 models, level maps to thinking_budget."""
+        from vox import ReasoningConfig
+
+        types_mock = MagicMock()
+        mock_types.return_value = types_mock
+
+        provider._build_thinking_config(ReasoningConfig(level="high"), model="gemini-2.5-pro")
+        types_mock.ThinkingConfig.assert_called_with(thinking_budget=32768)
+
+    @patch("vox.providers.gemini._import_genai_types")
+    def test_gemini3_uses_thinking_level_from_level(
+        self, mock_types, provider: GeminiProvider
+    ) -> None:
+        """For Gemini 3 models, level maps to thinking_level."""
+        from vox import ReasoningConfig
+
+        types_mock = MagicMock()
+        mock_types.return_value = types_mock
+
+        provider._build_thinking_config(ReasoningConfig(level="medium"), model="gemini-3.0-pro")
+        types_mock.ThinkingConfig.assert_called_with(thinking_level="MEDIUM")
+
+    @patch("vox.providers.gemini._import_genai_types")
+    def test_gemini3_minimal_collapses_to_low(self, mock_types, provider: GeminiProvider) -> None:
+        """Gemini 3 doesn't support 'minimal' level; collapse to 'low'."""
+        from vox import ReasoningConfig
+
+        types_mock = MagicMock()
+        mock_types.return_value = types_mock
+
+        provider._build_thinking_config(ReasoningConfig(level="minimal"), model="gemini-3.0-pro")
+        types_mock.ThinkingConfig.assert_called_with(thinking_level="LOW")
+
+    @patch("vox.providers.gemini._import_genai_types")
+    def test_gemini_override_budget_takes_priority(
+        self, mock_types, provider: GeminiProvider
+    ) -> None:
+        from vox import GeminiReasoning, ReasoningConfig
+
+        types_mock = MagicMock()
+        mock_types.return_value = types_mock
+
+        provider._build_thinking_config(
+            ReasoningConfig(
+                level="high",
+                gemini=GeminiReasoning(budget_tokens=12345),
+            ),
+            model="gemini-2.5-pro",
+        )
+        types_mock.ThinkingConfig.assert_called_with(thinking_budget=12345)
+
+    @patch("vox.providers.gemini._import_genai_types")
+    def test_no_level_no_override_returns_none(self, mock_types, provider: GeminiProvider) -> None:
+        from vox import ReasoningConfig
+
+        types_mock = MagicMock()
+        mock_types.return_value = types_mock
+
+        result = provider._build_thinking_config(ReasoningConfig(), model="gemini-2.5-pro")
+        assert result is None
+        types_mock.ThinkingConfig.assert_not_called()

@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from vox import Message, ProviderConfig, ReasoningConfig, Tool
+from vox import AnthropicReasoning, Message, ProviderConfig, ReasoningConfig, Tool
 from vox.models.messages import ToolCallData
 from vox.providers.anthropic import AnthropicProvider
 
@@ -153,7 +153,8 @@ class TestResponseTranslation:
 class TestReasoningConfig:
     """Tests for reasoning/thinking parameter building."""
 
-    def test_reasoning_sets_thinking_param(self, provider: AnthropicProvider) -> None:
+    def test_anthropic_override_sets_exact_budget(self, provider: AnthropicProvider) -> None:
+        """Provider-specific override controls budget_tokens precisely."""
         messages = [Message(role="user", content="Think hard")]
         request = provider._build_request_kwargs(
             messages,
@@ -162,13 +163,50 @@ class TestReasoningConfig:
             temperature=1.0,
             tools=None,
             response_schema=None,
-            reasoning=ReasoningConfig(budget_tokens=5000),
+            reasoning=ReasoningConfig(anthropic=AnthropicReasoning(budget_tokens=5000)),
             stop=None,
         )
         assert request["thinking"]["type"] == "enabled"
         assert request["thinking"]["budget_tokens"] == 5000
         # Temperature should NOT be set when thinking is enabled
         assert "temperature" not in request
+
+    def test_semantic_level_maps_to_budget(self, provider: AnthropicProvider) -> None:
+        """Semantic level maps to a default budget for Anthropic."""
+        messages = [Message(role="user", content="Hello")]
+        request = provider._build_request_kwargs(
+            messages,
+            model="claude-sonnet-4-20250514",
+            max_tokens=4096,
+            temperature=1.0,
+            tools=None,
+            response_schema=None,
+            reasoning=ReasoningConfig(level="high"),
+            stop=None,
+        )
+        assert request["thinking"]["type"] == "enabled"
+        # "high" maps to 32768 per LEVEL_TO_BUDGET_TOKENS
+        assert request["thinking"]["budget_tokens"] == 32768
+
+    def test_anthropic_override_takes_priority_over_level(
+        self, provider: AnthropicProvider
+    ) -> None:
+        """When both level and anthropic.budget_tokens are set, override wins."""
+        messages = [Message(role="user", content="Hello")]
+        request = provider._build_request_kwargs(
+            messages,
+            model="claude-sonnet-4-20250514",
+            max_tokens=4096,
+            temperature=1.0,
+            tools=None,
+            response_schema=None,
+            reasoning=ReasoningConfig(
+                level="high",
+                anthropic=AnthropicReasoning(budget_tokens=12345),
+            ),
+            stop=None,
+        )
+        assert request["thinking"]["budget_tokens"] == 12345
 
     def test_no_reasoning_sets_temperature(self, provider: AnthropicProvider) -> None:
         messages = [Message(role="user", content="Hello")]

@@ -22,7 +22,7 @@ from ..errors import (
 )
 from ..models.config import ProviderConfig
 from ..models.messages import ImageContent, Message, TextContent, ToolCallData
-from ..models.reasoning import ReasoningConfig, ThinkingBlock
+from ..models.reasoning import LEVEL_TO_BUDGET_TOKENS, ReasoningConfig, ThinkingBlock
 from ..models.responses import CompletionResponse, StreamChunk, Usage
 from ..models.tools import Tool
 from .base import Provider
@@ -214,6 +214,24 @@ class AnthropicProvider(Provider):
 
     # ── Build request ────────────────────────────────────────────────────
 
+    def _resolve_budget(self, reasoning: ReasoningConfig) -> int:
+        """Resolve the thinking budget from a ReasoningConfig.
+
+        Provider-specific override takes priority, then semantic level mapping,
+        then a sensible default.
+
+        Args:
+            reasoning: The reasoning configuration.
+
+        Returns:
+            Token budget for Anthropic's ``thinking.budget_tokens``.
+        """
+        if reasoning.anthropic and reasoning.anthropic.budget_tokens:
+            return reasoning.anthropic.budget_tokens
+        if reasoning.level:
+            return LEVEL_TO_BUDGET_TOKENS[reasoning.level]
+        return LEVEL_TO_BUDGET_TOKENS["medium"]
+
     def _build_request_kwargs(
         self,
         messages: list[Message],
@@ -258,7 +276,7 @@ class AnthropicProvider(Provider):
 
         # Reasoning and temperature are mutually exclusive in Anthropic
         if reasoning and reasoning.enabled:
-            budget = reasoning.budget_tokens or 10000
+            budget = self._resolve_budget(reasoning)
             request["thinking"] = {"type": "enabled", "budget_tokens": budget}
             # Anthropic requires temperature=1 when thinking is enabled
         else:
