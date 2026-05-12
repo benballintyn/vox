@@ -28,7 +28,12 @@ from ..errors import (
 from ..models.config import ProviderConfig
 from ..models.messages import ImageContent, Message, TextContent, ToolCallData
 from ..models.reasoning import ReasoningConfig, ThinkingBlock
-from ..models.responses import CompletionResponse, StreamChunk, Usage
+from ..models.responses import (
+    CompletionResponse,
+    StreamChunk,
+    Usage,
+    normalize_finish_reason,
+)
 from ..models.tools import Tool
 from .base import Provider
 
@@ -44,6 +49,31 @@ def _import_openai() -> Any:
             "The openai package is required for the OpenAI provider. "
             "Install it with: pip install vox[openai]"
         ) from None
+
+
+def _extract_retry_after(exc: Exception) -> float | None:
+    """Pull a Retry-After value out of an SDK exception's response headers.
+
+    Args:
+        exc: The SDK exception (typically with a ``.response`` attribute).
+
+    Returns:
+        Seconds to wait before retrying, or None if the header is missing
+        or unparseable.
+    """
+    response = getattr(exc, "response", None)
+    if response is None:
+        return None
+    headers = getattr(response, "headers", None)
+    if not headers:
+        return None
+    raw = headers.get("retry-after") or headers.get("Retry-After")
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (ValueError, TypeError):
+        return None
 
 
 class OpenAIProvider(Provider):
@@ -226,7 +256,9 @@ class OpenAIProvider(Provider):
         tools: list[Tool] | None,
         response_schema: type[BaseModel] | None,
         reasoning: ReasoningConfig | None,
-        stop: list[str] | None,
+        stop: list[str] | None = None,
+        previous_response_id: str | None = None,
+        store: bool | None = None,
         stream: bool = False,
         **kwargs: Any,
     ) -> dict[str, Any]:
@@ -240,9 +272,17 @@ class OpenAIProvider(Provider):
             tools: Available tools.
             response_schema: Pydantic model for structured output.
             reasoning: Reasoning config.
-            stop: Stop sequences.
+            previous_response_id: ID of a prior response to chain from. When set,
+                the API resumes from that response's state — you only need to
+                send the new turn's messages, not the full history. Requires
+                ``store=True`` on the prior response (default).
+            store: Whether OpenAI should persist this response server-side so a
+                later request can reference it via ``previous_response_id``.
+                Defaults to True (OpenAI's default) when not specified.
             stream: Whether to stream.
-            **kwargs: Passthrough.
+            **kwargs: Passthrough. The Responses API does NOT accept ``stop``
+                sequences; any caller-provided ``stop`` will be silently
+                dropped before the request is sent.
 
         Returns:
             Dict of keyword arguments.
@@ -268,8 +308,15 @@ class OpenAIProvider(Provider):
         if response_schema:
             request["text"] = pydantic_to_openai_responses_text_format(response_schema)
 
-        if stop:
-            request["stop"] = stop
+        if previous_response_id is not None:
+            request["previous_response_id"] = previous_response_id
+
+        if store is not None:
+            request["store"] = store
+
+        # Drop stop sequences if a caller threaded them through; the Responses
+        # API rejects this parameter (use a logit_bias on stop tokens instead).
+        kwargs.pop("stop", None)
 
         if reasoning and reasoning.enabled:
             reasoning_config: dict[str, Any] = {}
@@ -357,19 +404,45 @@ class OpenAIProvider(Provider):
         if response_schema and text_parts:
             parsed = validate_structured_response(response_schema, "".join(text_parts))
 
-        finish_reason = None
-        if hasattr(response, "status"):
-            finish_reason = response.status
+        raw_finish = self._extract_raw_finish_reason(response, has_tool_calls=bool(tool_calls))
 
         return CompletionResponse(
             message=message,
             usage=usage,
             provider="openai",
             model=model,
-            finish_reason=finish_reason,
+            finish_reason=normalize_finish_reason(raw_finish),
+            raw_finish_reason=raw_finish,
             thinking=thinking_blocks or None,
             parsed=parsed,
+            response_id=getattr(response, "id", None),
         )
+
+    def _extract_raw_finish_reason(self, response: Any, *, has_tool_calls: bool) -> str | None:
+        """Derive a finish-reason-like string from a Responses API response.
+
+        The Responses API does not return a single ``finish_reason`` field. We
+        synthesize one from ``status`` and ``incomplete_details.reason``:
+
+        - status="incomplete" → use incomplete_details.reason (e.g. "max_output_tokens")
+        - status="completed" + tool calls in output → "tool_calls"
+        - status="completed" otherwise → "stop"
+
+        Args:
+            response: The raw Responses API response object.
+            has_tool_calls: Whether the output contained any function_call items.
+
+        Returns:
+            A provider-native finish reason string suitable for normalization.
+        """
+        status = getattr(response, "status", None)
+        if status == "incomplete":
+            details = getattr(response, "incomplete_details", None)
+            reason = getattr(details, "reason", None) if details else None
+            return reason or "incomplete"
+        if status == "completed":
+            return "tool_calls" if has_tool_calls else "stop"
+        return status
 
     # ── Error handling ───────────────────────────────────────────────────
 
@@ -387,7 +460,11 @@ class OpenAIProvider(Provider):
         if isinstance(e, openai.AuthenticationError):
             raise AuthenticationError(str(e), provider="openai") from e
         if isinstance(e, openai.RateLimitError):
-            raise RateLimitError(str(e), provider="openai") from e
+            raise RateLimitError(
+                str(e),
+                retry_after=_extract_retry_after(e),
+                provider="openai",
+            ) from e
         if isinstance(e, openai.BadRequestError):
             msg = str(e)
             if "model" in msg.lower() and "not found" in msg.lower():
@@ -407,7 +484,11 @@ class OpenAIProvider(Provider):
             if status == 402:
                 raise QuotaExceededError(str(e), provider="openai") from e
             if status == 429:
-                raise RateLimitError(str(e), provider="openai") from e
+                raise RateLimitError(
+                    str(e),
+                    retry_after=_extract_retry_after(e),
+                    provider="openai",
+                ) from e
             raise ProviderError(str(e), provider="openai") from e
         if isinstance(e, openai.APIConnectionError):
             raise ProviderError(str(e), provider="openai") from e
@@ -465,9 +546,15 @@ class OpenAIProvider(Provider):
                     ),
                     reasoning_tokens=getattr(resp.usage, "reasoning_tokens", 0) or 0,
                 )
+            # Synthesize a finish reason from the final response state.
+            has_tool_calls = any(
+                getattr(item, "type", None) == "function_call"
+                for item in getattr(resp, "output", []) or []
+            )
+            raw_finish = self._extract_raw_finish_reason(resp, has_tool_calls=has_tool_calls)
             return StreamChunk(
                 type="done",
-                finish_reason=getattr(resp, "status", None),
+                finish_reason=normalize_finish_reason(raw_finish),
                 usage=usage,
             )
 
@@ -486,6 +573,8 @@ class OpenAIProvider(Provider):
         response_schema: type[BaseModel] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
+        previous_response_id: str | None = None,
+        store: bool | None = None,
         **kwargs: Any,
     ) -> CompletionResponse:
         """Synchronous Responses API call.
@@ -498,7 +587,11 @@ class OpenAIProvider(Provider):
             tools: Available tools.
             response_schema: Pydantic model for structured output.
             reasoning: Reasoning configuration.
-            stop: Stop sequences.
+            stop: Ignored. The Responses API does not support stop sequences.
+            previous_response_id: ID of a prior response to chain from for
+                stateful multi-turn conversations.
+            store: Whether OpenAI persists this response for later chaining
+                (defaults to True on OpenAI's side).
             **kwargs: Provider-specific passthrough.
 
         Returns:
@@ -514,6 +607,8 @@ class OpenAIProvider(Provider):
             response_schema=response_schema,
             reasoning=reasoning,
             stop=stop,
+            previous_response_id=previous_response_id,
+            store=store,
             **kwargs,
         )
         try:
@@ -538,6 +633,8 @@ class OpenAIProvider(Provider):
         response_schema: type[BaseModel] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
+        previous_response_id: str | None = None,
+        store: bool | None = None,
         **kwargs: Any,
     ) -> CompletionResponse:
         """Asynchronous Responses API call.
@@ -550,7 +647,9 @@ class OpenAIProvider(Provider):
             tools: Available tools.
             response_schema: Pydantic model for structured output.
             reasoning: Reasoning configuration.
-            stop: Stop sequences.
+            stop: Ignored. The Responses API does not support stop sequences.
+            previous_response_id: ID of a prior response to chain from.
+            store: Whether OpenAI persists this response for later chaining.
             **kwargs: Provider-specific passthrough.
 
         Returns:
@@ -566,6 +665,8 @@ class OpenAIProvider(Provider):
             response_schema=response_schema,
             reasoning=reasoning,
             stop=stop,
+            previous_response_id=previous_response_id,
+            store=store,
             **kwargs,
         )
         try:
@@ -589,6 +690,8 @@ class OpenAIProvider(Provider):
         tools: list[Tool] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
+        previous_response_id: str | None = None,
+        store: bool | None = None,
         **kwargs: Any,
     ) -> Iterator[StreamChunk]:
         """Synchronous streaming Responses API call.
@@ -600,7 +703,9 @@ class OpenAIProvider(Provider):
             temperature: Sampling temperature.
             tools: Available tools.
             reasoning: Reasoning configuration.
-            stop: Stop sequences.
+            stop: Ignored. The Responses API does not support stop sequences.
+            previous_response_id: ID of a prior response to chain from.
+            store: Whether OpenAI persists this response for later chaining.
             **kwargs: Provider-specific passthrough.
 
         Yields:
@@ -616,6 +721,8 @@ class OpenAIProvider(Provider):
             response_schema=None,
             reasoning=reasoning,
             stop=stop,
+            previous_response_id=previous_response_id,
+            store=store,
             stream=True,
             **kwargs,
         )
@@ -642,6 +749,8 @@ class OpenAIProvider(Provider):
         tools: list[Tool] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
+        previous_response_id: str | None = None,
+        store: bool | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[StreamChunk]:
         """Asynchronous streaming Responses API call.
@@ -653,7 +762,9 @@ class OpenAIProvider(Provider):
             temperature: Sampling temperature.
             tools: Available tools.
             reasoning: Reasoning configuration.
-            stop: Stop sequences.
+            stop: Ignored. The Responses API does not support stop sequences.
+            previous_response_id: ID of a prior response to chain from.
+            store: Whether OpenAI persists this response for later chaining.
             **kwargs: Provider-specific passthrough.
 
         Yields:
@@ -669,6 +780,8 @@ class OpenAIProvider(Provider):
             response_schema=None,
             reasoning=reasoning,
             stop=stop,
+            previous_response_id=previous_response_id,
+            store=store,
             stream=True,
             **kwargs,
         )

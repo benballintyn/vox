@@ -9,13 +9,20 @@ from .reasoning import (
     ReasoningConfig,
     ThinkingBlock,
 )
-from .responses import CompletionResponse, StreamChunk, Usage
+from .responses import (
+    CompletionResponse,
+    FinishReason,
+    StreamChunk,
+    Usage,
+    normalize_finish_reason,
+)
 from .tools import Tool, ToolCall, ToolResult
 
 __all__ = [
     "AnthropicReasoning",
     "CompletionResponse",
     "ContentPart",
+    "FinishReason",
     "GeminiReasoning",
     "ImageContent",
     "Message",
@@ -30,4 +37,5 @@ __all__ = [
     "ToolCallData",
     "ToolResult",
     "Usage",
+    "normalize_finish_reason",
 ]

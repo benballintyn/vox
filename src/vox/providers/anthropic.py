@@ -23,9 +23,39 @@ from ..errors import (
 from ..models.config import ProviderConfig
 from ..models.messages import ImageContent, Message, TextContent, ToolCallData
 from ..models.reasoning import LEVEL_TO_BUDGET_TOKENS, ReasoningConfig, ThinkingBlock
-from ..models.responses import CompletionResponse, StreamChunk, Usage
+from ..models.responses import (
+    CompletionResponse,
+    StreamChunk,
+    Usage,
+    normalize_finish_reason,
+)
 from ..models.tools import Tool
 from .base import Provider
+
+
+def _extract_retry_after(exc: Exception) -> float | None:
+    """Pull a Retry-After value out of an SDK exception's response headers.
+
+    Args:
+        exc: The SDK exception (typically with a ``.response`` attribute).
+
+    Returns:
+        Seconds to wait before retrying, or None if the header is missing
+        or unparseable.
+    """
+    response = getattr(exc, "response", None)
+    if response is None:
+        return None
+    headers = getattr(response, "headers", None)
+    if not headers:
+        return None
+    raw = headers.get("retry-after") or headers.get("Retry-After")
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (ValueError, TypeError):
+        return None
 
 
 def _import_anthropic() -> Any:
@@ -115,23 +145,14 @@ class AnthropicProvider(Provider):
 
             if msg.role == "tool":
                 # Tool results must be content blocks in a user message
-                result.append(
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": msg.tool_call_id or "",
-                                "content": msg.text,
-                                **(
-                                    {"is_error": True}
-                                    if msg.name and msg.name.startswith("error")
-                                    else {}
-                                ),
-                            }
-                        ],
-                    }
-                )
+                tool_result_block: dict[str, Any] = {
+                    "type": "tool_result",
+                    "tool_use_id": msg.tool_call_id or "",
+                    "content": msg.text,
+                }
+                if msg.is_error:
+                    tool_result_block["is_error"] = True
+                result.append({"role": "user", "content": [tool_result_block]})
                 continue
 
             if msg.role == "assistant":
@@ -379,14 +400,17 @@ class AnthropicProvider(Provider):
         if response_schema and structured_input is not None:
             parsed = validate_structured_response(response_schema, structured_input)
 
+        raw_finish = getattr(response, "stop_reason", None)
         return CompletionResponse(
             message=message,
             usage=usage,
             provider="anthropic",
             model=model,
-            finish_reason=getattr(response, "stop_reason", None),
+            finish_reason=normalize_finish_reason(raw_finish),
+            raw_finish_reason=raw_finish,
             thinking=thinking_blocks or None,
             parsed=parsed,
+            response_id=getattr(response, "id", None),
         )
 
     # ── Error handling ───────────────────────────────────────────────────
@@ -405,7 +429,11 @@ class AnthropicProvider(Provider):
         if isinstance(e, anthropic.AuthenticationError):
             raise AuthenticationError(str(e), provider="anthropic") from e
         if isinstance(e, anthropic.RateLimitError):
-            raise RateLimitError(str(e), provider="anthropic") from e
+            raise RateLimitError(
+                str(e),
+                retry_after=_extract_retry_after(e),
+                provider="anthropic",
+            ) from e
         if isinstance(e, anthropic.BadRequestError):
             msg = str(e)
             if "model" in msg.lower() and "not found" in msg.lower():
@@ -423,7 +451,11 @@ class AnthropicProvider(Provider):
             if status == 402:
                 raise QuotaExceededError(str(e), provider="anthropic") from e
             if status == 429:
-                raise RateLimitError(str(e), provider="anthropic") from e
+                raise RateLimitError(
+                    str(e),
+                    retry_after=_extract_retry_after(e),
+                    provider="anthropic",
+                ) from e
             raise ProviderError(str(e), provider="anthropic") from e
         if isinstance(e, anthropic.APIConnectionError):
             raise ProviderError(str(e), provider="anthropic") from e
@@ -544,7 +576,7 @@ class AnthropicProvider(Provider):
             delta = event.delta
             stop_reason = getattr(delta, "stop_reason", None)
             if stop_reason:
-                return StreamChunk(type="done", finish_reason=stop_reason)
+                return StreamChunk(type="done", finish_reason=normalize_finish_reason(stop_reason))
 
         return None
 

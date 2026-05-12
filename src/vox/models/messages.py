@@ -46,6 +46,9 @@ class Message(BaseModel):
         tool_calls: Tool calls made by the assistant in this message.
         tool_call_id: ID of the tool call this message is a result for.
         name: Name of the tool for tool result messages.
+        is_error: Whether this tool result represents an error. Only meaningful
+            for ``role="tool"`` messages. Providers that support tool error
+            signaling (e.g. Anthropic) use this flag.
     """
 
     role: Literal["system", "user", "assistant", "tool"]
@@ -53,6 +56,7 @@ class Message(BaseModel):
     tool_calls: list[ToolCallData] | None = None
     tool_call_id: str | None = None
     name: str | None = None
+    is_error: bool = False
 
     @property
     def text(self) -> str:

@@ -30,7 +30,12 @@ from ..errors import (
 from ..models.config import ProviderConfig
 from ..models.messages import ImageContent, Message, TextContent, ToolCallData
 from ..models.reasoning import ReasoningConfig
-from ..models.responses import CompletionResponse, StreamChunk, Usage
+from ..models.responses import (
+    CompletionResponse,
+    StreamChunk,
+    Usage,
+    normalize_finish_reason,
+)
 from ..models.tools import Tool
 from .base import Provider
 
@@ -46,6 +51,23 @@ def _import_openai() -> Any:
             "The openai package is required for Chat Completions-based providers. "
             "Install it with: pip install vox[openai]"
         ) from None
+
+
+def _extract_retry_after(exc: Exception) -> float | None:
+    """Pull a Retry-After value out of an SDK exception's response headers."""
+    response = getattr(exc, "response", None)
+    if response is None:
+        return None
+    headers = getattr(response, "headers", None)
+    if not headers:
+        return None
+    raw = headers.get("retry-after") or headers.get("Retry-After")
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (ValueError, TypeError):
+        return None
 
 
 class ChatCompletionsProvider(Provider):
@@ -245,13 +267,16 @@ class ChatCompletionsProvider(Provider):
         if response_schema and msg.content:
             parsed = validate_structured_response(response_schema, msg.content)
 
+        raw_finish = choice.finish_reason
         return CompletionResponse(
             message=message,
             usage=usage,
             provider=self.provider_name,
             model=model,
-            finish_reason=choice.finish_reason,
+            finish_reason=normalize_finish_reason(raw_finish),
+            raw_finish_reason=raw_finish,
             parsed=parsed,
+            response_id=getattr(response, "id", None),
         )
 
     # ── Build request kwargs ─────────────────────────────────────────────
@@ -333,7 +358,11 @@ class ChatCompletionsProvider(Provider):
         if isinstance(e, openai.AuthenticationError):
             raise AuthenticationError(str(e), provider=provider) from e
         if isinstance(e, openai.RateLimitError):
-            raise RateLimitError(str(e), provider=provider) from e
+            raise RateLimitError(
+                str(e),
+                retry_after=_extract_retry_after(e),
+                provider=provider,
+            ) from e
         if isinstance(e, openai.BadRequestError):
             msg = str(e)
             if "model" in msg.lower() and "not found" in msg.lower():
@@ -353,7 +382,11 @@ class ChatCompletionsProvider(Provider):
             if status == 402:
                 raise QuotaExceededError(str(e), provider=provider) from e
             if status == 429:
-                raise RateLimitError(str(e), provider=provider) from e
+                raise RateLimitError(
+                    str(e),
+                    retry_after=_extract_retry_after(e),
+                    provider=provider,
+                ) from e
             raise ProviderError(str(e), provider=provider) from e
         if isinstance(e, openai.APIConnectionError):
             raise ProviderError(str(e), provider=provider) from e
@@ -362,7 +395,7 @@ class ChatCompletionsProvider(Provider):
 
     # ── Streaming helpers ────────────────────────────────────────────────
 
-    def _translate_stream_chunk(self, chunk: Any) -> StreamChunk | None:
+    def _translate_stream_chunk(self, chunk: Any) -> list[StreamChunk]:
         """Translate a single Chat Completions stream chunk to a StreamChunk.
 
         Args:
@@ -371,51 +404,67 @@ class ChatCompletionsProvider(Provider):
         Returns:
             A StreamChunk, or None if the chunk should be skipped.
         """
-        # Usage chunk (final)
+        chunks: list[StreamChunk] = []
+
+        # Usage chunk (final, sent after finish_reason on a chunk with no choices)
         if hasattr(chunk, "usage") and chunk.usage and not chunk.choices:
-            return StreamChunk(
-                type="usage",
-                usage=Usage(
-                    prompt_tokens=chunk.usage.prompt_tokens or 0,
-                    completion_tokens=chunk.usage.completion_tokens or 0,
-                    total_tokens=chunk.usage.total_tokens or 0,
-                ),
+            chunks.append(
+                StreamChunk(
+                    type="usage",
+                    usage=Usage(
+                        prompt_tokens=chunk.usage.prompt_tokens or 0,
+                        completion_tokens=chunk.usage.completion_tokens or 0,
+                        total_tokens=chunk.usage.total_tokens or 0,
+                    ),
+                )
             )
+            return chunks
 
         if not chunk.choices:
-            return None
+            return chunks
 
         choice = chunk.choices[0]
         delta = choice.delta
 
-        # Finish reason
-        if choice.finish_reason:
-            return StreamChunk(type="done", finish_reason=choice.finish_reason)
-
-        # Tool call start
+        # Tool call deltas. A single chunk may contain BOTH the function name
+        # (first occurrence) and the start of the arguments — we must emit
+        # both events, not return early after the name.
         if delta.tool_calls:
             tc = delta.tool_calls[0]
             if tc.function and tc.function.name:
-                return StreamChunk(
-                    type="tool_call_start",
-                    tool_call=ToolCallData(
-                        id=tc.id or "",
-                        name=tc.function.name,
-                        arguments={},
-                    ),
+                chunks.append(
+                    StreamChunk(
+                        type="tool_call_start",
+                        tool_call=ToolCallData(
+                            id=tc.id or "",
+                            name=tc.function.name,
+                            arguments={},
+                        ),
+                    )
                 )
             if tc.function and tc.function.arguments:
-                return StreamChunk(
-                    type="tool_call_delta",
-                    tool_call_id=tc.id or "",
-                    arguments_delta=tc.function.arguments,
+                chunks.append(
+                    StreamChunk(
+                        type="tool_call_delta",
+                        tool_call_id=tc.id or "",
+                        arguments_delta=tc.function.arguments,
+                    )
                 )
 
         # Text delta
         if delta.content:
-            return StreamChunk(type="text", text=delta.content)
+            chunks.append(StreamChunk(type="text", text=delta.content))
 
-        return None
+        # Finish reason (emitted last for this chunk if present)
+        if choice.finish_reason:
+            chunks.append(
+                StreamChunk(
+                    type="done",
+                    finish_reason=normalize_finish_reason(choice.finish_reason),
+                )
+            )
+
+        return chunks
 
     # ── Public API ───────────────────────────────────────────────────────
 
@@ -584,9 +633,7 @@ class ChatCompletionsProvider(Provider):
         try:
             response_stream = self._get_sync_client().chat.completions.create(**request)
             for chunk in response_stream:
-                translated = self._translate_stream_chunk(chunk)
-                if translated:
-                    yield translated
+                yield from self._translate_stream_chunk(chunk)
         except Exception as e:
             if isinstance(
                 e,
@@ -646,8 +693,7 @@ class ChatCompletionsProvider(Provider):
         try:
             response_stream = await self._get_async_client().chat.completions.create(**request)
             async for chunk in response_stream:
-                translated = self._translate_stream_chunk(chunk)
-                if translated:
+                for translated in self._translate_stream_chunk(chunk):
                     yield translated
         except Exception as e:
             if isinstance(

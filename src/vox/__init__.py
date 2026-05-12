@@ -20,7 +20,13 @@ from .models.reasoning import (
     ReasoningConfig,
     ThinkingBlock,
 )
-from .models.responses import CompletionResponse, StreamChunk, Usage
+from .models.responses import (
+    CompletionResponse,
+    FinishReason,
+    StreamChunk,
+    Usage,
+    normalize_finish_reason,
+)
 from .models.tools import Tool, ToolCall, ToolResult
 
 __all__ = [
@@ -30,6 +36,7 @@ __all__ = [
     "AnthropicReasoning",
     "CompletionResponse",
     "ContentPart",
+    "FinishReason",
     "GeminiReasoning",
     "ImageContent",
     "Message",
@@ -44,6 +51,7 @@ __all__ = [
     "ToolCallData",
     "ToolResult",
     "Usage",
+    "normalize_finish_reason",
     # Errors
     "AuthenticationError",
     "ContentFilterError",

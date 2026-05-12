@@ -50,6 +50,7 @@ def make_openai_chat_response(
     mock_response = MagicMock()
     mock_response.choices = [mock_choice]
     mock_response.usage = mock_usage
+    mock_response.id = "chatcmpl_test_123"
 
     return mock_response
 
@@ -104,5 +105,7 @@ def make_openai_responses_api_response(
     mock_response.output = output_items
     mock_response.usage = mock_usage
     mock_response.status = status
+    mock_response.id = "resp_test_456"
+    mock_response.incomplete_details = None
 
     return mock_response

@@ -30,7 +30,12 @@ from ..models.reasoning import (
     ReasoningConfig,
     ThinkingBlock,
 )
-from ..models.responses import CompletionResponse, StreamChunk, Usage
+from ..models.responses import (
+    CompletionResponse,
+    StreamChunk,
+    Usage,
+    normalize_finish_reason,
+)
 from ..models.tools import Tool
 from .base import Provider
 
@@ -358,20 +363,23 @@ class GeminiProvider(Provider):
         if response_schema and text_parts:
             parsed = validate_structured_response(response_schema, "".join(text_parts))
 
-        finish_reason = None
+        raw_finish = None
         if response.candidates:
             fr = getattr(response.candidates[0], "finish_reason", None)
             if fr:
-                finish_reason = str(fr).lower().replace("_", " ")
+                # Gemini's finish_reason is an enum; normalize to its string name.
+                raw_finish = getattr(fr, "name", str(fr)).lower()
 
         return CompletionResponse(
             message=message,
             usage=usage,
             provider="gemini",
             model=model,
-            finish_reason=finish_reason,
+            finish_reason=normalize_finish_reason(raw_finish),
+            raw_finish_reason=raw_finish,
             thinking=thinking_blocks or None,
             parsed=parsed,
+            response_id=getattr(response, "response_id", None),
         )
 
     # ── Error handling ───────────────────────────────────────────────────
@@ -443,7 +451,8 @@ class GeminiProvider(Provider):
         # Check for finish reason
         fr = getattr(candidate, "finish_reason", None)
         if fr:
-            results.append(StreamChunk(type="done", finish_reason=str(fr).lower()))
+            raw = getattr(fr, "name", str(fr)).lower()
+            results.append(StreamChunk(type="done", finish_reason=normalize_finish_reason(raw)))
 
         return results
 
