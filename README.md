@@ -8,21 +8,25 @@ Write your code once and run it against OpenAI, Anthropic, Google Gemini, OpenRo
 
 ```bash
 # Core library (no provider SDKs)
-pip install vox
+pip install vox-llm
 
 # With a specific provider
-pip install vox[openai]
-pip install vox[anthropic]
-pip install vox[gemini]
+pip install "vox-llm[openai]"
+pip install "vox-llm[anthropic]"
+pip install "vox-llm[gemini]"
 
 # All providers
-pip install vox[all]
+pip install "vox-llm[all]"
 ```
 
-**From GitHub:**
+> **Note**: the PyPI package is `vox-llm` (the name `vox` was already taken).
+> The Python import name is still `vox` — `from vox import VoxClient` works
+> unchanged.
+
+**From GitHub** (pinned to a tag):
 
 ```bash
-pip install "vox[all] @ git+https://github.com/benballintyn/vox.git@main"
+pip install "vox-llm[all] @ git+https://github.com/benballintyn/vox.git@v0.1.0"
 ```
 
 Requires Python 3.11+.

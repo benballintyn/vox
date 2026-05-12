@@ -1,0 +1,133 @@
+name: Release
+
+# Triggered by pushing a tag like `v0.1.0`. The workflow:
+#   1. Verifies the tag version matches `pyproject.toml`.
+#   2. Runs tests across all supported Pythons.
+#   3. Builds sdist + wheel with Poetry.
+#   4. Publishes to PyPI via OIDC trusted publishing (no token).
+#   5. Creates a GitHub Release with auto-generated notes and attached artifacts.
+#
+# Cutting a release:
+#   1. Bump `version = "..."` in pyproject.toml. Commit on main.
+#   2. `git tag -a v0.1.0 -m "Release v0.1.0"`
+#   3. `git push origin v0.1.0`
+#
+# If the workflow fails after PyPI accepts the upload, you cannot re-publish
+# the same version — PyPI versions are immutable. Bump the patch version and
+# retry.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+# Concurrency: only one release at a time. A second tag pushed while the
+# first is mid-flight will queue.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify tag matches pyproject
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: tag
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"      # v0.1.0
+          VERSION="${TAG#v}"                  # 0.1.0
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Tag: $TAG / Version: $VERSION"
+
+      - name: Verify pyproject.toml version matches tag
+        run: |
+          PYPROJECT_VERSION=$(grep -E '^version\s*=' pyproject.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+          if [ "$PYPROJECT_VERSION" != "${{ steps.tag.outputs.version }}" ]; then
+            echo "::error::pyproject.toml version ($PYPROJECT_VERSION) does not match tag version (${{ steps.tag.outputs.version }})"
+            exit 1
+          fi
+          echo "Versions match: $PYPROJECT_VERSION"
+
+  test:
+    name: Test (py${{ matrix.python-version }})
+    needs: verify
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pipx install poetry
+      - run: poetry install --with dev --all-extras --no-interaction
+      - run: poetry run pytest -m "not integration"
+
+  build:
+    name: Build sdist + wheel
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pipx install poetry
+      - name: Build
+        run: poetry build
+      - name: Inspect dist
+        run: ls -la dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    # The `pypi` environment is required for OIDC trusted publishing. The
+    # matching environment name must be set on the PyPI pending publisher
+    # configuration (https://pypi.org/manage/account/publishing/).
+    environment:
+      name: pypi
+      url: https://pypi.org/p/vox-llm
+    permissions:
+      id-token: write   # required for trusted publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    name: Create GitHub Release
+    needs: [verify, publish-pypi]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # required to create the Release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so release-notes generation can diff
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: dist/*
+          fail_on_unmatched_files: true
