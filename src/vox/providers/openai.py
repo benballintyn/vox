@@ -273,10 +273,14 @@ class OpenAIProvider(Provider):
 
         if reasoning and reasoning.enabled:
             reasoning_config: dict[str, Any] = {}
-            if reasoning.level:
+            # Provider-specific overrides take priority over semantic level
+            if reasoning.openai:
+                if reasoning.openai.effort:
+                    reasoning_config["effort"] = reasoning.openai.effort
+                if reasoning.openai.summary:
+                    reasoning_config["summary"] = reasoning.openai.summary
+            elif reasoning.level:
                 reasoning_config["effort"] = reasoning.level
-            if reasoning.budget_tokens:
-                reasoning_config["max_tokens"] = reasoning.budget_tokens
             if reasoning_config:
                 request["reasoning"] = reasoning_config
 

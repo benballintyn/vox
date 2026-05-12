@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from vox import Message, ProviderConfig, Tool
+from vox import Message, OpenAIReasoning, ProviderConfig, ReasoningConfig, Tool
 from vox.models.messages import ToolCallData
 from vox.providers.openai import OpenAIProvider
 
@@ -133,3 +133,107 @@ class TestComplete:
             model="gpt-4o",
         )
         assert result.message.text == "Hi there!"
+
+
+class TestReasoningTranslation:
+    """Tests for ReasoningConfig → Responses API reasoning param."""
+
+    def test_semantic_level_maps_to_effort(self, provider: OpenAIProvider) -> None:
+        request = provider._build_request_kwargs(
+            [Message(role="user", content="Hi")],
+            model="gpt-5",
+            max_tokens=4096,
+            temperature=1.0,
+            tools=None,
+            response_schema=None,
+            reasoning=ReasoningConfig(level="medium"),
+            stop=None,
+        )
+        assert request["reasoning"] == {"effort": "medium"}
+
+    def test_minimal_level_supported(self, provider: OpenAIProvider) -> None:
+        """GPT-5's 'minimal' effort tier is reachable through the semantic level."""
+        request = provider._build_request_kwargs(
+            [Message(role="user", content="Hi")],
+            model="gpt-5",
+            max_tokens=4096,
+            temperature=1.0,
+            tools=None,
+            response_schema=None,
+            reasoning=ReasoningConfig(level="minimal"),
+            stop=None,
+        )
+        assert request["reasoning"] == {"effort": "minimal"}
+
+    def test_openai_override_with_xhigh(self, provider: OpenAIProvider) -> None:
+        """xhigh is OpenAI-specific and only reachable via the override."""
+        request = provider._build_request_kwargs(
+            [Message(role="user", content="Hi")],
+            model="gpt-5",
+            max_tokens=4096,
+            temperature=1.0,
+            tools=None,
+            response_schema=None,
+            reasoning=ReasoningConfig(openai=OpenAIReasoning(effort="xhigh")),
+            stop=None,
+        )
+        assert request["reasoning"]["effort"] == "xhigh"
+
+    def test_openai_override_with_summary(self, provider: OpenAIProvider) -> None:
+        """summary param flows through for thinking blocks to be returned."""
+        request = provider._build_request_kwargs(
+            [Message(role="user", content="Hi")],
+            model="gpt-5",
+            max_tokens=4096,
+            temperature=1.0,
+            tools=None,
+            response_schema=None,
+            reasoning=ReasoningConfig(
+                openai=OpenAIReasoning(effort="high", summary="auto"),
+            ),
+            stop=None,
+        )
+        assert request["reasoning"]["effort"] == "high"
+        assert request["reasoning"]["summary"] == "auto"
+
+    def test_override_takes_priority_over_level(self, provider: OpenAIProvider) -> None:
+        request = provider._build_request_kwargs(
+            [Message(role="user", content="Hi")],
+            model="gpt-5",
+            max_tokens=4096,
+            temperature=1.0,
+            tools=None,
+            response_schema=None,
+            reasoning=ReasoningConfig(
+                level="low",
+                openai=OpenAIReasoning(effort="xhigh"),
+            ),
+            stop=None,
+        )
+        assert request["reasoning"]["effort"] == "xhigh"
+
+    def test_disabled_reasoning_omits_param(self, provider: OpenAIProvider) -> None:
+        request = provider._build_request_kwargs(
+            [Message(role="user", content="Hi")],
+            model="gpt-5",
+            max_tokens=4096,
+            temperature=1.0,
+            tools=None,
+            response_schema=None,
+            reasoning=ReasoningConfig(enabled=False, level="high"),
+            stop=None,
+        )
+        assert "reasoning" not in request
+
+    def test_no_reasoning_omits_param(self, provider: OpenAIProvider) -> None:
+        request = provider._build_request_kwargs(
+            [Message(role="user", content="Hi")],
+            model="gpt-5",
+            max_tokens=4096,
+            temperature=1.0,
+            tools=None,
+            response_schema=None,
+            reasoning=None,
+            stop=None,
+        )
+        assert "reasoning" not in request

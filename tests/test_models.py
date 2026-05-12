@@ -173,16 +173,45 @@ class TestReasoning:
     def test_reasoning_config_defaults(self) -> None:
         rc = ReasoningConfig()
         assert rc.enabled is True
-        assert rc.budget_tokens is None
         assert rc.level is None
-
-    def test_reasoning_config_with_budget(self) -> None:
-        rc = ReasoningConfig(budget_tokens=10000)
-        assert rc.budget_tokens == 10000
+        assert rc.openai is None
+        assert rc.anthropic is None
+        assert rc.gemini is None
 
     def test_reasoning_config_with_level(self) -> None:
         rc = ReasoningConfig(level="high")
         assert rc.level == "high"
+
+    def test_reasoning_config_with_minimal_level(self) -> None:
+        rc = ReasoningConfig(level="minimal")
+        assert rc.level == "minimal"
+
+    def test_reasoning_config_with_openai_override(self) -> None:
+        from vox import OpenAIReasoning
+
+        rc = ReasoningConfig(openai=OpenAIReasoning(effort="xhigh", summary="detailed"))
+        assert rc.openai.effort == "xhigh"
+        assert rc.openai.summary == "detailed"
+
+    def test_reasoning_config_with_anthropic_override(self) -> None:
+        from vox import AnthropicReasoning
+
+        rc = ReasoningConfig(anthropic=AnthropicReasoning(budget_tokens=10000))
+        assert rc.anthropic.budget_tokens == 10000
+
+    def test_reasoning_config_with_gemini_override(self) -> None:
+        from vox import GeminiReasoning
+
+        rc = ReasoningConfig(gemini=GeminiReasoning(budget_tokens=8192))
+        assert rc.gemini.budget_tokens == 8192
+
+    def test_reasoning_config_combined_level_and_override(self) -> None:
+        from vox import OpenAIReasoning
+
+        rc = ReasoningConfig(level="medium", openai=OpenAIReasoning(effort="xhigh"))
+        # Level remains for other providers; openai sub-config overrides for OpenAI
+        assert rc.level == "medium"
+        assert rc.openai.effort == "xhigh"
 
     def test_thinking_block(self) -> None:
         tb = ThinkingBlock(text="Step 1: analyze the problem", token_count=50)
