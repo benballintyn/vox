@@ -1,17 +1,40 @@
 [project]
-name = "vox"
+# Distribution name on PyPI. The Python import name is still `vox`
+# (`from vox import ...`) — only `pip install` uses the distribution name.
+# Renamed from "vox" because that name was already taken on PyPI.
+name = "vox-llm"
 version = "0.1.0"
 description = "Model-agnostic LLM execution library"
 authors = [
     {name = "Ben Ballintyn", email = "benballintyn@gmail.com"}
 ]
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.11,<3.14"
+keywords = ["llm", "openai", "anthropic", "gemini", "tool-use", "streaming"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
+
 dependencies = [
     "pydantic>=2.0,<3.0",
     "loguru>=0.7.0",
     "httpx>=0.27",
 ]
+
+[project.urls]
+Homepage = "https://github.com/benballintyn/vox"
+Repository = "https://github.com/benballintyn/vox"
+Issues = "https://github.com/benballintyn/vox/issues"
+Changelog = "https://github.com/benballintyn/vox/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 openai = ["openai>=1.50"]
