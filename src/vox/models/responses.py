@@ -9,6 +9,58 @@ from pydantic import BaseModel
 from .messages import Message, ToolCallData
 from .reasoning import ThinkingBlock
 
+# Normalized finish reasons (a small, stable set the user can switch on).
+FinishReason = Literal[
+    "stop",  # Natural end of turn / model decided to stop
+    "length",  # Hit max_tokens / output token limit
+    "tool_calls",  # Stopped to make tool calls
+    "content_filter",  # Blocked by safety/content filtering
+    "stop_sequence",  # Hit a user-specified stop sequence
+    "other",  # Anything else (rare; kept for forward compat)
+]
+
+# Mapping from provider-native finish reasons to normalized values.
+_FINISH_REASON_MAP: dict[str, FinishReason] = {
+    # OpenAI Chat Completions + Responses API
+    "stop": "stop",
+    "length": "length",
+    "max_output_tokens": "length",
+    "tool_calls": "tool_calls",
+    "function_call": "tool_calls",
+    "content_filter": "content_filter",
+    # Anthropic
+    "end_turn": "stop",
+    "max_tokens": "length",
+    "tool_use": "tool_calls",
+    "refusal": "content_filter",
+    "pause_turn": "other",
+    # Gemini (uppercase native, but provider lowercases before mapping)
+    "max_tokens".lower(): "length",  # also matches Anthropic
+    "safety": "content_filter",
+    "recitation": "content_filter",
+    "blocklist": "content_filter",
+    "prohibited_content": "content_filter",
+    "spii": "content_filter",
+    "malformed_function_call": "other",
+    # Stop sequences (multiple provider names)
+    "stop_sequence": "stop_sequence",
+}
+
+
+def normalize_finish_reason(raw: str | None) -> FinishReason | None:
+    """Normalize a provider-specific finish reason to a common vocabulary.
+
+    Args:
+        raw: The provider's native finish reason string, or None.
+
+    Returns:
+        A normalized FinishReason, or None if input was None. Unknown values
+        map to "other".
+    """
+    if raw is None:
+        return None
+    return _FINISH_REASON_MAP.get(raw.lower().strip(), "other")
+
 
 class Usage(BaseModel):
     """Token usage information.
@@ -38,18 +90,26 @@ class CompletionResponse(BaseModel):
         usage: Token usage statistics.
         provider: Name of the provider that generated this response.
         model: Model identifier used for this completion.
-        finish_reason: Why the model stopped generating.
+        finish_reason: Normalized stop reason (``stop``, ``length``,
+            ``tool_calls``, ``content_filter``, ``stop_sequence``, ``other``).
+        raw_finish_reason: The provider's native finish reason string,
+            preserved verbatim for debugging.
         thinking: Thinking/reasoning blocks, if reasoning was enabled.
         parsed: Validated Pydantic instance when ``response_schema`` was used.
+        response_id: Provider-assigned response identifier. For OpenAI's
+            Responses API, this is the ID needed for ``previous_response_id``
+            on a follow-up turn (stateful chaining).
     """
 
     message: Message
     usage: Usage
     provider: str
     model: str
-    finish_reason: str | None = None
+    finish_reason: FinishReason | None = None
+    raw_finish_reason: str | None = None
     thinking: list[ThinkingBlock] | None = None
     parsed: Any = None
+    response_id: str | None = None
 
 
 class StreamChunk(BaseModel):

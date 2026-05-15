@@ -66,6 +66,7 @@ def _make_gemini_response(
     mock_response = MagicMock()
     mock_response.candidates = [mock_candidate]
     mock_response.usage_metadata = mock_usage
+    mock_response.response_id = "gemini_test_789"
 
     return mock_response
 

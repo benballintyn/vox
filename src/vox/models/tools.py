@@ -56,7 +56,8 @@ class ToolResult(BaseModel):
         """Convert this tool result to a Message with role='tool'.
 
         Returns:
-            A Message instance suitable for inclusion in a conversation.
+            A Message instance suitable for inclusion in a conversation,
+            with ``is_error`` propagated from this ToolResult.
         """
         from .messages import Message
 
@@ -65,4 +66,5 @@ class ToolResult(BaseModel):
             content=self.content,
             tool_call_id=self.tool_call_id,
             name=self.name,
+            is_error=self.is_error,
         )

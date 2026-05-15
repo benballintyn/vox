@@ -60,6 +60,7 @@ def _make_anthropic_response(
     mock_response.content = blocks
     mock_response.usage = mock_usage
     mock_response.stop_reason = stop_reason
+    mock_response.id = "msg_test_abc"
 
     return mock_response
 
