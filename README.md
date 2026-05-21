@@ -232,6 +232,27 @@ if response.message.tool_calls:
 
 This works identically across OpenAI, Anthropic, Gemini, and OpenRouter — vox translates the tool definitions and results to each provider's native format.
 
+### Provider-native (server-side) tools
+
+Some providers offer server-side tools that run on their infrastructure — Anthropic's `web_search_20250305`, OpenAI's `web_search_preview`, Gemini's Google Search grounding, and others. These have provider-specific shapes and no cross-provider abstraction, so vox does **not** model them as a `Tool`. Instead, the `tools` list accepts raw dicts alongside vox `Tool` objects — raw dicts are passed through to the provider verbatim:
+
+```python
+response = client.complete(
+    messages=[Message(role="user", content="What's the current 10Y JGB yield?")],
+    model="claude-sonnet-4-5-20250929",
+    tools=[
+        my_function_tool,  # vox Tool — translated to the provider's format
+        {                  # raw dict — passed through verbatim
+            "type": "web_search_20250305",
+            "name": "web_search",
+            "max_uses": 5,
+        },
+    ],
+)
+```
+
+The caller is responsible for matching the resolved provider's expected schema — a raw dict shaped for one provider won't work on another. An entry that is neither a `Tool` nor a `dict` raises a `TypeError`.
+
 ## Structured Output
 
 Pass a Pydantic model to get validated, typed responses:

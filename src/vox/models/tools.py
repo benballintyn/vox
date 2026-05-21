@@ -21,6 +21,24 @@ class Tool(BaseModel):
     parameters: dict[str, Any]
 
 
+# A tool entry accepted by provider methods. Either a vox ``Tool`` (translated
+# to the provider's function-tool format) or a raw dict passed through to the
+# provider verbatim. The dict form is the escape hatch for provider-native
+# server-side tools — e.g. Anthropic's ``web_search_20250305``, OpenAI's
+# ``web_search_preview`` — which have provider-specific shapes and no
+# cross-provider abstraction. The caller is responsible for matching the
+# resolved provider's expected schema.
+ToolSpec = Tool | dict[str, Any]
+
+# Shared error message for invalid entries in a `tools` list. Used by every
+# provider's `_translate_tools` so the failure mode is consistent.
+TOOL_SPEC_TYPE_ERROR = (
+    "Each entry in `tools` must be a vox.Tool or a dict. Got {got}. "
+    "Pass a vox.Tool for ordinary function tools, or a raw dict for "
+    "provider-native server-side tools (e.g. Anthropic's web_search_20250305)."
+)
+
+
 class ToolCall(BaseModel):
     """A tool call made by the model.
 

@@ -12,7 +12,7 @@ from ..models.config import ProviderConfig
 from ..models.messages import Message
 from ..models.reasoning import ReasoningConfig
 from ..models.responses import CompletionResponse, StreamChunk
-from ..models.tools import Tool
+from ..models.tools import ToolSpec
 
 
 class Provider(ABC):
@@ -37,7 +37,7 @@ class Provider(ABC):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 1.0,
-        tools: list[Tool] | None = None,
+        tools: list[ToolSpec] | None = None,
         response_schema: type[BaseModel] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
@@ -72,7 +72,7 @@ class Provider(ABC):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 1.0,
-        tools: list[Tool] | None = None,
+        tools: list[ToolSpec] | None = None,
         response_schema: type[BaseModel] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
@@ -107,7 +107,7 @@ class Provider(ABC):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 1.0,
-        tools: list[Tool] | None = None,
+        tools: list[ToolSpec] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
         **kwargs: Any,
@@ -137,7 +137,7 @@ class Provider(ABC):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 1.0,
-        tools: list[Tool] | None = None,
+        tools: list[ToolSpec] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
         **kwargs: Any,

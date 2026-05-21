@@ -36,7 +36,7 @@ from ..models.responses import (
     Usage,
     normalize_finish_reason,
 )
-from ..models.tools import Tool
+from ..models.tools import TOOL_SPEC_TYPE_ERROR, Tool, ToolSpec
 from .base import Provider
 
 
@@ -195,26 +195,52 @@ class GeminiProvider(Provider):
                     )
         return parts
 
-    def _translate_tools(self, tools: list[Tool]) -> list[Any]:
-        """Translate vox Tools to Gemini FunctionDeclaration objects.
+    def _translate_tools(self, tools: list[ToolSpec]) -> list[Any]:
+        """Translate tool specs to Gemini tool objects.
+
+        vox ``Tool`` objects are collected into a single
+        ``types.Tool(function_declarations=[...])``. Raw dicts are passed
+        through verbatim as separate entries in the tools list — the escape
+        hatch for Gemini-native tools such as Google Search grounding
+        (``{"google_search": {}}``) or code execution.
+
+        Note: Gemini's tool structure differs from OpenAI/Anthropic — it has
+        no flat per-tool dict shape. A pass-through dict must already match
+        what the google-genai SDK expects for a ``config.tools`` entry; vox
+        does not reshape it. Malformed dicts surface as a request-time error
+        from the SDK.
 
         Args:
-            tools: List of vox Tool objects.
+            tools: List of vox Tool objects and/or raw provider-native dicts.
 
         Returns:
-            List of genai Tool objects.
+            List of genai tool entries.
+
+        Raises:
+            TypeError: If an entry is neither a vox Tool nor a dict.
         """
         types = _import_genai_types()
         declarations = []
+        native: list[Any] = []
         for t in tools:
-            declarations.append(
-                types.FunctionDeclaration(
-                    name=t.name,
-                    description=t.description,
-                    parameters=t.parameters,
+            if isinstance(t, dict):
+                native.append(t)
+            elif isinstance(t, Tool):
+                declarations.append(
+                    types.FunctionDeclaration(
+                        name=t.name,
+                        description=t.description,
+                        parameters=t.parameters,
+                    )
                 )
-            )
-        return [types.Tool(function_declarations=declarations)]
+            else:
+                raise TypeError(TOOL_SPEC_TYPE_ERROR.format(got=type(t).__name__))
+
+        result: list[Any] = []
+        if declarations:
+            result.append(types.Tool(function_declarations=declarations))
+        result.extend(native)
+        return result
 
     # ── Build request config ─────────────────────────────────────────────
 
@@ -465,7 +491,7 @@ class GeminiProvider(Provider):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 1.0,
-        tools: list[Tool] | None = None,
+        tools: list[ToolSpec] | None = None,
         response_schema: type[BaseModel] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
@@ -527,7 +553,7 @@ class GeminiProvider(Provider):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 1.0,
-        tools: list[Tool] | None = None,
+        tools: list[ToolSpec] | None = None,
         response_schema: type[BaseModel] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
@@ -589,7 +615,7 @@ class GeminiProvider(Provider):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 1.0,
-        tools: list[Tool] | None = None,
+        tools: list[ToolSpec] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
         **kwargs: Any,
@@ -647,7 +673,7 @@ class GeminiProvider(Provider):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 1.0,
-        tools: list[Tool] | None = None,
+        tools: list[ToolSpec] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
         **kwargs: Any,
