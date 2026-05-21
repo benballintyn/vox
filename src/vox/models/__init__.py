@@ -16,7 +16,7 @@ from .responses import (
     Usage,
     normalize_finish_reason,
 )
-from .tools import Tool, ToolCall, ToolResult
+from .tools import Tool, ToolCall, ToolResult, ToolSpec
 
 __all__ = [
     "AnthropicReasoning",
@@ -36,6 +36,7 @@ __all__ = [
     "ToolCall",
     "ToolCallData",
     "ToolResult",
+    "ToolSpec",
     "Usage",
     "normalize_finish_reason",
 ]

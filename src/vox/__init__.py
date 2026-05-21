@@ -27,7 +27,7 @@ from .models.responses import (
     Usage,
     normalize_finish_reason,
 )
-from .models.tools import Tool, ToolCall, ToolResult
+from .models.tools import Tool, ToolCall, ToolResult, ToolSpec
 
 __all__ = [
     # Client
@@ -50,6 +50,7 @@ __all__ = [
     "ToolCall",
     "ToolCallData",
     "ToolResult",
+    "ToolSpec",
     "Usage",
     "normalize_finish_reason",
     # Errors

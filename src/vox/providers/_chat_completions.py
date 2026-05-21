@@ -36,7 +36,7 @@ from ..models.responses import (
     Usage,
     normalize_finish_reason,
 )
-from ..models.tools import Tool
+from ..models.tools import TOOL_SPEC_TYPE_ERROR, Tool, ToolSpec
 from .base import Provider
 
 
@@ -195,26 +195,39 @@ class ChatCompletionsProvider(Provider):
 
         return d
 
-    def _translate_tools(self, tools: list[Tool]) -> list[dict[str, Any]]:
-        """Translate vox Tools to Chat Completions format.
+    def _translate_tools(self, tools: list[ToolSpec]) -> list[dict[str, Any]]:
+        """Translate tool specs to Chat Completions format.
+
+        A vox ``Tool`` is translated to the function-tool shape. A raw dict is
+        passed through verbatim — the escape hatch for provider-native tools.
 
         Args:
-            tools: List of vox Tool objects.
+            tools: List of vox Tool objects and/or raw provider-native dicts.
 
         Returns:
             List of tool dicts for the ``tools`` parameter.
+
+        Raises:
+            TypeError: If an entry is neither a vox Tool nor a dict.
         """
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": t.name,
-                    "description": t.description,
-                    "parameters": t.parameters,
-                },
-            }
-            for t in tools
-        ]
+        result: list[dict[str, Any]] = []
+        for t in tools:
+            if isinstance(t, dict):
+                result.append(t)
+            elif isinstance(t, Tool):
+                result.append(
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": t.name,
+                            "description": t.description,
+                            "parameters": t.parameters,
+                        },
+                    }
+                )
+            else:
+                raise TypeError(TOOL_SPEC_TYPE_ERROR.format(got=type(t).__name__))
+        return result
 
     # ── Response translation ─────────────────────────────────────────────
 
@@ -288,7 +301,7 @@ class ChatCompletionsProvider(Provider):
         model: str,
         max_tokens: int,
         temperature: float,
-        tools: list[Tool] | None,
+        tools: list[ToolSpec] | None,
         response_schema: type[BaseModel] | None,
         reasoning: ReasoningConfig | None,
         stop: list[str] | None,
@@ -475,7 +488,7 @@ class ChatCompletionsProvider(Provider):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 1.0,
-        tools: list[Tool] | None = None,
+        tools: list[ToolSpec] | None = None,
         response_schema: type[BaseModel] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
@@ -536,7 +549,7 @@ class ChatCompletionsProvider(Provider):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 1.0,
-        tools: list[Tool] | None = None,
+        tools: list[ToolSpec] | None = None,
         response_schema: type[BaseModel] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
@@ -597,7 +610,7 @@ class ChatCompletionsProvider(Provider):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 1.0,
-        tools: list[Tool] | None = None,
+        tools: list[ToolSpec] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
         **kwargs: Any,
@@ -657,7 +670,7 @@ class ChatCompletionsProvider(Provider):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 1.0,
-        tools: list[Tool] | None = None,
+        tools: list[ToolSpec] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
         **kwargs: Any,
