@@ -1,0 +1,39 @@
+name: release-please
+
+# release-please watches main. For each merged PR it parses the squashed
+# commit (which == the PR title — vox squash-merges, so the PR title is the
+# sole commit message on main) and keeps a standing "release PR" that bumps
+# the version in pyproject.toml and updates CHANGELOG.md. Merge that release
+# PR to tag vX.Y.Z and cut a GitHub Release.
+#
+# That tag push then triggers pypi-publish.yml, which builds and uploads to
+# PyPI. release-please owns versioning + changelog + tag + GitHub Release;
+# pypi-publish.yml owns the PyPI upload.
+#
+# Versioning comes from Conventional Commit types in PR titles (enforced by
+# pr_title.yml):
+#   fix:      -> patch     feat:     -> minor
+#   feat!: / "BREAKING CHANGE:" footer -> major
+#
+# One-time repo setup:
+#   Settings -> Actions -> General -> Workflow permissions:
+#     enable "Allow GitHub Actions to create and approve pull requests".
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # config + manifest are read from the repo root by default:
+          #   release-please-config.json
+          #   .release-please-manifest.json

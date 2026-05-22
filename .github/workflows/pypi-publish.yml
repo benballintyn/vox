@@ -1,38 +1,38 @@
-name: Release
+name: Publish to PyPI
 
-# Triggered by pushing a tag like `v0.1.0`. The workflow:
-#   1. Verifies the tag version matches `pyproject.toml`.
-#   2. Runs tests across all supported Pythons.
-#   3. Builds sdist + wheel with Poetry.
-#   4. Publishes to PyPI via OIDC trusted publishing (no token).
-#   5. Creates a GitHub Release with auto-generated notes and attached artifacts.
+# Triggered by a `v*.*.*` tag. release-please creates that tag (and the
+# matching GitHub Release) when its release PR is merged — see
+# release_please.yml. This workflow's job is narrower: given a release tag,
+#   1. Verify the tag version matches `pyproject.toml`.
+#   2. Run tests across all supported Pythons.
+#   3. Build sdist + wheel with Poetry.
+#   4. Publish to PyPI via OIDC trusted publishing (no token).
 #
-# Cutting a release:
-#   1. Bump `version = "..."` in pyproject.toml. Commit on main.
-#   2. `git tag -a v0.1.0 -m "Release v0.1.0"`
-#   3. `git push origin v0.1.0`
+# The GitHub Release itself is created by release-please, not here.
 #
-# If the workflow fails after PyPI accepts the upload, you cannot re-publish
-# the same version — PyPI versions are immutable. Bump the patch version and
-# retry.
+# Cutting a release: merge the standing release-please PR. That bumps the
+# version, updates CHANGELOG.md, pushes the tag, and creates the GitHub
+# Release — which in turn triggers this workflow to publish to PyPI.
+#
+# If this workflow fails after PyPI accepts the upload, you cannot re-publish
+# the same version — PyPI versions are immutable. A follow-up patch release
+# (another release-please PR) is the way forward.
 
 on:
   push:
     tags:
       - "v*.*.*"
 
-# Concurrency: only one release at a time. A second tag pushed while the
+# Concurrency: only one publish at a time. A second tag pushed while the
 # first is mid-flight will queue.
 concurrency:
-  group: release
+  group: pypi-publish
   cancel-in-progress: false
 
 jobs:
   verify:
     name: Verify tag matches pyproject
     runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.tag.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -108,26 +108,3 @@ jobs:
           path: dist/
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
-
-  github-release:
-    name: Create GitHub Release
-    needs: [verify, publish-pypi]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write   # required to create the Release
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0   # full history so release-notes generation can diff
-      - uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: dist/
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
-          generate_release_notes: true
-          files: dist/*
-          fail_on_unmatched_files: true
