@@ -10,6 +10,7 @@ All notable changes to vox are documented here. Format follows
 ### Bug Fixes
 
 * **tool-use:** accept provider-native tool dicts in tools list ([#8](https://github.com/benballintyn/vox/issues/8)) ([#9](https://github.com/benballintyn/vox/issues/9)) ([c43d9f7](https://github.com/benballintyn/vox/commit/c43d9f7c6d9e2a9312c2dc6c630baa3cf8882330))
+* **packaging:** ship py.typed marker so downstream type checkers use vox's type hints (PEP 561) ([#11](https://github.com/benballintyn/vox/issues/11)) ([1b8d767](https://github.com/benballintyn/vox/commit/1b8d76718c20ef1cff75d9da3c6e68ff6a71f80c))
 
 ## [Unreleased]
 
