@@ -1,33 +1,48 @@
 name: Publish to PyPI
 
-# Triggered by a `v*.*.*` tag. release-please creates that tag (and the
-# matching GitHub Release) when its release PR is merged — see
-# release_please.yml. This workflow's job is narrower: given a release tag,
-#   1. Verify the tag version matches `pyproject.toml`.
-#   2. Run tests across all supported Pythons.
-#   3. Build sdist + wheel with Poetry.
-#   4. Publish to PyPI via OIDC trusted publishing (no token).
+# Builds and publishes a tagged release to PyPI. This workflow does NOT
+# trigger itself — it is invoked two ways:
 #
+#   1. Automatically: release_please.yml calls it (`workflow_call`) right
+#      after release-please cuts a release, passing the new tag.
+#   2. Manually: `gh workflow run pypi-publish.yml -f tag=vX.Y.Z` — a
+#      break-glass / re-publish path.
+#
+# It is NOT triggered by tag pushes. release-please creates tags using the
+# default GITHUB_TOKEN, and GitHub deliberately does not fire workflows from
+# GITHUB_TOKEN-created events (recursion prevention) — so a `push: tags`
+# trigger would never fire for an automated release. Calling this workflow
+# directly from release_please.yml runs it inside that same workflow run,
+# sidestepping the limitation entirely.
+#
+# Steps: verify the tag matches pyproject.toml, run tests across supported
+# Pythons, build sdist + wheel, publish to PyPI via OIDC trusted publishing.
 # The GitHub Release itself is created by release-please, not here.
 #
-# Cutting a release: merge the standing release-please PR. That bumps the
-# version, updates CHANGELOG.md, pushes the tag, and creates the GitHub
-# Release — which in turn triggers this workflow to publish to PyPI.
-#
-# If this workflow fails after PyPI accepts the upload, you cannot re-publish
-# the same version — PyPI versions are immutable. A follow-up patch release
-# (another release-please PR) is the way forward.
+# PyPI versions are immutable: if this fails after PyPI accepts the upload,
+# the same version cannot be re-published — cut a follow-up patch release.
 
 on:
-  push:
-    tags:
-      - "v*.*.*"
+  workflow_call:
+    inputs:
+      tag:
+        description: "Release tag to build and publish (e.g. v0.1.1)."
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build and publish (e.g. v0.1.1)."
+        required: true
+        type: string
 
-# Concurrency: only one publish at a time. A second tag pushed while the
-# first is mid-flight will queue.
+# Concurrency: only one publish at a time.
 concurrency:
   group: pypi-publish
   cancel-in-progress: false
+
+permissions:
+  contents: read
 
 jobs:
   verify:
@@ -35,20 +50,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Extract version from tag
-        id: tag
-        run: |
-          TAG="${GITHUB_REF#refs/tags/}"      # v0.1.0
-          VERSION="${TAG#v}"                  # 0.1.0
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Tag: $TAG / Version: $VERSION"
+        with:
+          ref: ${{ inputs.tag }}
 
       - name: Verify pyproject.toml version matches tag
         run: |
+          TAG="${{ inputs.tag }}"            # v0.1.1
+          VERSION="${TAG#v}"                 # 0.1.1
           PYPROJECT_VERSION=$(grep -E '^version\s*=' pyproject.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
-          if [ "$PYPROJECT_VERSION" != "${{ steps.tag.outputs.version }}" ]; then
-            echo "::error::pyproject.toml version ($PYPROJECT_VERSION) does not match tag version (${{ steps.tag.outputs.version }})"
+          if [ "$PYPROJECT_VERSION" != "$VERSION" ]; then
+            echo "::error::pyproject.toml version ($PYPROJECT_VERSION) does not match tag ($TAG)"
             exit 1
           fi
           echo "Versions match: $PYPROJECT_VERSION"
@@ -63,6 +74,8 @@ jobs:
         python-version: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
@@ -76,6 +89,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -94,13 +109,14 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     # The `pypi` environment is required for OIDC trusted publishing. The
-    # matching environment name must be set on the PyPI pending publisher
+    # matching environment name must be set on the PyPI publisher
     # configuration (https://pypi.org/manage/account/publishing/).
     environment:
       name: pypi
       url: https://pypi.org/p/vox-llm
     permissions:
       id-token: write   # required for trusted publishing
+      contents: read
     steps:
       - uses: actions/download-artifact@v4
         with:
