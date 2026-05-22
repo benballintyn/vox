@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Sequence
 from typing import Any
 
 from pydantic import BaseModel
@@ -37,7 +37,7 @@ class Provider(ABC):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 1.0,
-        tools: list[ToolSpec] | None = None,
+        tools: Sequence[ToolSpec] | None = None,
         response_schema: type[BaseModel] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
@@ -72,7 +72,7 @@ class Provider(ABC):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 1.0,
-        tools: list[ToolSpec] | None = None,
+        tools: Sequence[ToolSpec] | None = None,
         response_schema: type[BaseModel] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
@@ -107,7 +107,7 @@ class Provider(ABC):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 1.0,
-        tools: list[ToolSpec] | None = None,
+        tools: Sequence[ToolSpec] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
         **kwargs: Any,
@@ -129,15 +129,20 @@ class Provider(ABC):
         """
         ...
 
+    # NOTE: declared as a plain ``def`` (not ``async def``) returning an
+    # AsyncIterator. Subclasses implement it as an async generator (``async
+    # def`` with ``yield``), which satisfies this signature. Declaring the
+    # abstract method ``async def`` would type it as returning a Coroutine
+    # wrapping the iterator, which the async-generator overrides do not match.
     @abstractmethod
-    async def astream(
+    def astream(
         self,
         messages: list[Message],
         *,
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 1.0,
-        tools: list[ToolSpec] | None = None,
+        tools: Sequence[ToolSpec] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
         **kwargs: Any,

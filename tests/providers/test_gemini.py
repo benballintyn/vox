@@ -90,7 +90,7 @@ class TestMessageTranslation:
         mock_types.return_value = types_mock
 
         messages = [Message(role="user", content="Hi")]
-        contents, _ = provider._translate_contents(messages)
+        provider._translate_contents(messages)
         # Verify Content was created with role="user"
         types_mock.Content.assert_called()
 

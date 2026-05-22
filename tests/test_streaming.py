@@ -98,7 +98,9 @@ class TestChatCompletionsStreaming:
         )
         assert len(chunks) == 1
         assert chunks[0].type == "tool_call_start"
-        assert chunks[0].tool_call.name == "search"
+        tool_call = chunks[0].tool_call
+        assert tool_call is not None
+        assert tool_call.name == "search"
 
     def test_tool_call_arguments_only_chunk(
         self, chat_completions_provider: ChatCompletionsProvider
@@ -121,7 +123,9 @@ class TestChatCompletionsStreaming:
         )
         assert len(chunks) == 2
         assert chunks[0].type == "tool_call_start"
-        assert chunks[0].tool_call.name == "search"
+        tool_call = chunks[0].tool_call
+        assert tool_call is not None
+        assert tool_call.name == "search"
         assert chunks[1].type == "tool_call_delta"
         assert chunks[1].arguments_delta == '{"q":"test"}'
 
@@ -146,7 +150,9 @@ class TestChatCompletionsStreaming:
         chunks = chat_completions_provider._translate_stream_chunk(_cc_chunk(usage=(100, 50, 150)))
         assert len(chunks) == 1
         assert chunks[0].type == "usage"
-        assert chunks[0].usage.total_tokens == 150
+        usage = chunks[0].usage
+        assert usage is not None
+        assert usage.total_tokens == 150
 
     def test_empty_chunk(self, chat_completions_provider: ChatCompletionsProvider) -> None:
         chunk = MagicMock()
@@ -186,6 +192,7 @@ class TestAnthropicStreaming:
         chunk = anthropic_provider._process_stream_event(
             _anthropic_event("content_block_delta", delta=delta)
         )
+        assert chunk is not None
         assert chunk.type == "text"
         assert chunk.text == "Hello"
 
@@ -196,6 +203,7 @@ class TestAnthropicStreaming:
         chunk = anthropic_provider._process_stream_event(
             _anthropic_event("content_block_delta", delta=delta)
         )
+        assert chunk is not None
         assert chunk.type == "thinking"
         assert chunk.thinking_text == "Let me reason..."
 
@@ -207,7 +215,9 @@ class TestAnthropicStreaming:
         chunk = anthropic_provider._process_stream_event(
             _anthropic_event("content_block_start", content_block=block)
         )
+        assert chunk is not None
         assert chunk.type == "tool_call_start"
+        assert chunk.tool_call is not None
         assert chunk.tool_call.name == "search"
 
     def test_input_json_delta(self, anthropic_provider: AnthropicProvider) -> None:
@@ -217,6 +227,7 @@ class TestAnthropicStreaming:
         chunk = anthropic_provider._process_stream_event(
             _anthropic_event("content_block_delta", delta=delta)
         )
+        assert chunk is not None
         assert chunk.type == "tool_call_delta"
         assert chunk.arguments_delta == '{"q":'
 
@@ -229,6 +240,7 @@ class TestAnthropicStreaming:
         chunk = anthropic_provider._process_stream_event(
             _anthropic_event("message_delta", delta=delta)
         )
+        assert chunk is not None
         assert chunk.type == "done"
         assert chunk.finish_reason == "stop"
 
@@ -240,6 +252,7 @@ class TestAnthropicStreaming:
         chunk = anthropic_provider._process_stream_event(
             _anthropic_event("message_delta", delta=delta)
         )
+        assert chunk is not None
         assert chunk.finish_reason == "tool_calls"
 
 
@@ -261,6 +274,7 @@ class TestOpenAIStreaming:
         event.type = "response.output_text.delta"
         event.delta = "Hello"
         chunk = openai_provider._process_stream_event(event)
+        assert chunk is not None
         assert chunk.type == "text"
         assert chunk.text == "Hello"
 
@@ -273,7 +287,9 @@ class TestOpenAIStreaming:
         event.type = "response.output_item.added"
         event.item = item
         chunk = openai_provider._process_stream_event(event)
+        assert chunk is not None
         assert chunk.type == "tool_call_start"
+        assert chunk.tool_call is not None
         assert chunk.tool_call.name == "search"
 
     def test_function_arguments_delta(self, openai_provider: OpenAIProvider) -> None:
@@ -282,6 +298,7 @@ class TestOpenAIStreaming:
         event.call_id = "call_1"
         event.delta = '{"q":'
         chunk = openai_provider._process_stream_event(event)
+        assert chunk is not None
         assert chunk.type == "tool_call_delta"
         assert chunk.arguments_delta == '{"q":'
 
@@ -290,6 +307,7 @@ class TestOpenAIStreaming:
         event.type = "response.reasoning_summary_text.delta"
         event.delta = "Considering..."
         chunk = openai_provider._process_stream_event(event)
+        assert chunk is not None
         assert chunk.type == "thinking"
         assert chunk.thinking_text == "Considering..."
 
@@ -312,6 +330,7 @@ class TestOpenAIStreaming:
         event.response = resp
 
         chunk = openai_provider._process_stream_event(event)
+        assert chunk is not None
         assert chunk.type == "done"
         assert chunk.finish_reason == "tool_calls"
 
@@ -333,5 +352,6 @@ class TestOpenAIStreaming:
         event.response = resp
 
         chunk = openai_provider._process_stream_event(event)
+        assert chunk is not None
         assert chunk.type == "done"
         assert chunk.finish_reason == "length"

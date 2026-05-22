@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Sequence
 from typing import Any
 
 from pydantic import BaseModel
@@ -141,7 +141,7 @@ class VoxClient:
         provider: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 1.0,
-        tools: list[ToolSpec] | None = None,
+        tools: Sequence[ToolSpec] | None = None,
         response_schema: type[BaseModel] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
@@ -188,7 +188,7 @@ class VoxClient:
         provider: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 1.0,
-        tools: list[ToolSpec] | None = None,
+        tools: Sequence[ToolSpec] | None = None,
         response_schema: type[BaseModel] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
@@ -233,7 +233,7 @@ class VoxClient:
         provider: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 1.0,
-        tools: list[ToolSpec] | None = None,
+        tools: Sequence[ToolSpec] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
         **kwargs: Any,
@@ -275,7 +275,7 @@ class VoxClient:
         provider: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 1.0,
-        tools: list[ToolSpec] | None = None,
+        tools: Sequence[ToolSpec] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
         **kwargs: Any,

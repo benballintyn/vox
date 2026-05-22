@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from .messages import Message
 
 
 class Tool(BaseModel):
@@ -70,7 +73,7 @@ class ToolResult(BaseModel):
     content: str
     is_error: bool = False
 
-    def to_message(self) -> Message:  # noqa: F821
+    def to_message(self) -> Message:
         """Convert this tool result to a Message with role='tool'.
 
         Returns:

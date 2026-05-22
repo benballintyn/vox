@@ -4,6 +4,7 @@ import pytest
 
 from vox import InvalidRequestError, ProviderConfig, VoxClient
 from vox._registry import resolve_provider
+from vox.providers.openrouter import OpenRouterProvider
 
 
 class TestProviderRegistry:
@@ -100,6 +101,7 @@ class TestVoxClient:
             openrouter_app_url="https://myapp.com",
         )
         provider = client._get_provider("openrouter")
+        assert isinstance(provider, OpenRouterProvider)
         headers = provider._get_default_headers()
         assert headers["X-Title"] == "MyApp"
         assert headers["HTTP-Referer"] == "https://myapp.com"

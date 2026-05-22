@@ -30,18 +30,22 @@ from .models.responses import (
 from .models.tools import Tool, ToolCall, ToolResult, ToolSpec
 
 __all__ = [
-    # Client
-    "VoxClient",
-    # Models
     "AnthropicReasoning",
+    "AuthenticationError",
     "CompletionResponse",
+    "ContentFilterError",
     "ContentPart",
     "FinishReason",
     "GeminiReasoning",
     "ImageContent",
+    "InvalidRequestError",
     "Message",
+    "ModelNotFoundError",
     "OpenAIReasoning",
     "ProviderConfig",
+    "ProviderError",
+    "QuotaExceededError",
+    "RateLimitError",
     "ReasoningConfig",
     "StreamChunk",
     "TextContent",
@@ -52,14 +56,7 @@ __all__ = [
     "ToolResult",
     "ToolSpec",
     "Usage",
-    "normalize_finish_reason",
-    # Errors
-    "AuthenticationError",
-    "ContentFilterError",
-    "InvalidRequestError",
-    "ModelNotFoundError",
-    "ProviderError",
-    "QuotaExceededError",
-    "RateLimitError",
+    "VoxClient",
     "VoxError",
+    "normalize_finish_reason",
 ]
