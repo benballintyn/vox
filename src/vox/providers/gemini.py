@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Sequence
 from typing import Any
 
 from pydantic import BaseModel
@@ -195,7 +195,7 @@ class GeminiProvider(Provider):
                     )
         return parts
 
-    def _translate_tools(self, tools: list[ToolSpec]) -> list[Any]:
+    def _translate_tools(self, tools: Sequence[ToolSpec]) -> list[Any]:
         """Translate tool specs to Gemini tool objects.
 
         vox ``Tool`` objects are collected into a single
@@ -491,7 +491,7 @@ class GeminiProvider(Provider):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 1.0,
-        tools: list[ToolSpec] | None = None,
+        tools: Sequence[ToolSpec] | None = None,
         response_schema: type[BaseModel] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
@@ -553,7 +553,7 @@ class GeminiProvider(Provider):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 1.0,
-        tools: list[ToolSpec] | None = None,
+        tools: Sequence[ToolSpec] | None = None,
         response_schema: type[BaseModel] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
@@ -615,7 +615,7 @@ class GeminiProvider(Provider):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 1.0,
-        tools: list[ToolSpec] | None = None,
+        tools: Sequence[ToolSpec] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
         **kwargs: Any,
@@ -673,7 +673,7 @@ class GeminiProvider(Provider):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 1.0,
-        tools: list[ToolSpec] | None = None,
+        tools: Sequence[ToolSpec] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
         **kwargs: Any,

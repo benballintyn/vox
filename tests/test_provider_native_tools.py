@@ -8,6 +8,8 @@ passed through verbatim, and anything else raises a clear TypeError.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from vox import Message, ProviderConfig, Tool
@@ -28,7 +30,7 @@ ANTHROPIC_WEB_SEARCH = {
     "max_uses": 5,
 }
 OPENAI_WEB_SEARCH = {"type": "web_search_preview"}
-GEMINI_GOOGLE_SEARCH = {"google_search": {}}
+GEMINI_GOOGLE_SEARCH: dict[str, Any] = {"google_search": {}}
 
 
 class TestAnthropicNativeTools:
@@ -61,7 +63,7 @@ class TestAnthropicNativeTools:
         assert result[1] == ANTHROPIC_WEB_SEARCH
 
     def test_bad_type_raises_typeerror(self, provider: AnthropicProvider) -> None:
-        with pytest.raises(TypeError, match="must be a vox.Tool or a dict"):
+        with pytest.raises(TypeError, match=r"must be a vox\.Tool or a dict"):
             provider._translate_tools(["not a tool"])  # type: ignore[list-item]
 
     def test_issue_8_repro_builds_request(self, provider: AnthropicProvider) -> None:
@@ -103,7 +105,7 @@ class TestOpenAINativeTools:
         assert result[1] == OPENAI_WEB_SEARCH
 
     def test_bad_type_raises_typeerror(self, provider: OpenAIProvider) -> None:
-        with pytest.raises(TypeError, match="must be a vox.Tool or a dict"):
+        with pytest.raises(TypeError, match=r"must be a vox\.Tool or a dict"):
             provider._translate_tools([42])  # type: ignore[list-item]
 
 
@@ -132,7 +134,7 @@ class TestChatCompletionsNativeTools:
         assert result[1] == native
 
     def test_bad_type_raises_typeerror(self, provider: OpenRouterProvider) -> None:
-        with pytest.raises(TypeError, match="must be a vox.Tool or a dict"):
+        with pytest.raises(TypeError, match=r"must be a vox\.Tool or a dict"):
             provider._translate_tools([None])  # type: ignore[list-item]
 
 
@@ -162,5 +164,5 @@ class TestGeminiNativeTools:
         assert result[1] == GEMINI_GOOGLE_SEARCH
 
     def test_bad_type_raises_typeerror(self, provider: GeminiProvider) -> None:
-        with pytest.raises(TypeError, match="must be a vox.Tool or a dict"):
+        with pytest.raises(TypeError, match=r"must be a vox\.Tool or a dict"):
             provider._translate_tools([("tuple", "not", "tool")])  # type: ignore[list-item]

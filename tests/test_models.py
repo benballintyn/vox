@@ -64,6 +64,7 @@ class TestMessage:
                 ToolCallData(id="call_1", name="search", arguments={"q": "test"}),
             ],
         )
+        assert msg.tool_calls is not None
         assert len(msg.tool_calls) == 1
         assert msg.tool_calls[0].name == "search"
 
@@ -160,6 +161,7 @@ class TestResponses:
             type="usage",
             usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
         )
+        assert chunk.usage is not None
         assert chunk.usage.total_tokens == 15
 
     def test_stream_chunk_thinking(self) -> None:
@@ -190,6 +192,7 @@ class TestReasoning:
         from vox import OpenAIReasoning
 
         rc = ReasoningConfig(openai=OpenAIReasoning(effort="xhigh", summary="detailed"))
+        assert rc.openai is not None
         assert rc.openai.effort == "xhigh"
         assert rc.openai.summary == "detailed"
 
@@ -197,12 +200,14 @@ class TestReasoning:
         from vox import AnthropicReasoning
 
         rc = ReasoningConfig(anthropic=AnthropicReasoning(budget_tokens=10000))
+        assert rc.anthropic is not None
         assert rc.anthropic.budget_tokens == 10000
 
     def test_reasoning_config_with_gemini_override(self) -> None:
         from vox import GeminiReasoning
 
         rc = ReasoningConfig(gemini=GeminiReasoning(budget_tokens=8192))
+        assert rc.gemini is not None
         assert rc.gemini.budget_tokens == 8192
 
     def test_reasoning_config_combined_level_and_override(self) -> None:
@@ -211,6 +216,7 @@ class TestReasoning:
         rc = ReasoningConfig(level="medium", openai=OpenAIReasoning(effort="xhigh"))
         # Level remains for other providers; openai sub-config overrides for OpenAI
         assert rc.level == "medium"
+        assert rc.openai is not None
         assert rc.openai.effort == "xhigh"
 
     def test_thinking_block(self) -> None:

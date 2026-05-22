@@ -22,7 +22,7 @@ class TestMessageTranslation:
 
     def test_simple_user_message(self, provider: OpenAIProvider) -> None:
         messages = [Message(role="user", content="Hello")]
-        items, instructions = provider._translate_input(messages)
+        items, _ = provider._translate_input(messages)
         assert len(items) == 1
         assert items[0]["role"] == "user"
         assert items[0]["type"] == "message"

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Sequence
 from typing import Any
 
 from pydantic import BaseModel
@@ -215,7 +215,7 @@ class AnthropicProvider(Provider):
                     )
         return parts
 
-    def _translate_tools(self, tools: list[ToolSpec]) -> list[dict[str, Any]]:
+    def _translate_tools(self, tools: Sequence[ToolSpec]) -> list[dict[str, Any]]:
         """Translate tool specs to Anthropic tool format.
 
         A vox ``Tool`` is translated to the function-tool shape (``input_schema``).
@@ -275,7 +275,7 @@ class AnthropicProvider(Provider):
         model: str,
         max_tokens: int,
         temperature: float,
-        tools: list[ToolSpec] | None,
+        tools: Sequence[ToolSpec] | None,
         response_schema: type[BaseModel] | None,
         reasoning: ReasoningConfig | None,
         stop: list[str] | None,
@@ -604,7 +604,7 @@ class AnthropicProvider(Provider):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 1.0,
-        tools: list[ToolSpec] | None = None,
+        tools: Sequence[ToolSpec] | None = None,
         response_schema: type[BaseModel] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
@@ -656,7 +656,7 @@ class AnthropicProvider(Provider):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 1.0,
-        tools: list[ToolSpec] | None = None,
+        tools: Sequence[ToolSpec] | None = None,
         response_schema: type[BaseModel] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
@@ -708,7 +708,7 @@ class AnthropicProvider(Provider):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 1.0,
-        tools: list[ToolSpec] | None = None,
+        tools: Sequence[ToolSpec] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
         **kwargs: Any,
@@ -757,7 +757,7 @@ class AnthropicProvider(Provider):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 1.0,
-        tools: list[ToolSpec] | None = None,
+        tools: Sequence[ToolSpec] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
         **kwargs: Any,

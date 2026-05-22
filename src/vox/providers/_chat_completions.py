@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Sequence
 from typing import Any
 
 from loguru import logger
@@ -153,7 +153,7 @@ class ChatCompletionsProvider(Provider):
         d: dict[str, Any] = {"role": msg.role}
 
         if msg.role == "tool":
-            d["content"] = msg.text if isinstance(msg.content, str) else msg.text
+            d["content"] = msg.text
             if msg.tool_call_id:
                 d["tool_call_id"] = msg.tool_call_id
             return d
@@ -162,7 +162,7 @@ class ChatCompletionsProvider(Provider):
         if isinstance(msg.content, str):
             d["content"] = msg.content
         else:
-            parts = []
+            parts: list[dict[str, Any]] = []
             for part in msg.content:
                 if isinstance(part, TextContent):
                     parts.append({"type": "text", "text": part.text})
@@ -195,7 +195,7 @@ class ChatCompletionsProvider(Provider):
 
         return d
 
-    def _translate_tools(self, tools: list[ToolSpec]) -> list[dict[str, Any]]:
+    def _translate_tools(self, tools: Sequence[ToolSpec]) -> list[dict[str, Any]]:
         """Translate tool specs to Chat Completions format.
 
         A vox ``Tool`` is translated to the function-tool shape. A raw dict is
@@ -301,7 +301,7 @@ class ChatCompletionsProvider(Provider):
         model: str,
         max_tokens: int,
         temperature: float,
-        tools: list[ToolSpec] | None,
+        tools: Sequence[ToolSpec] | None,
         response_schema: type[BaseModel] | None,
         reasoning: ReasoningConfig | None,
         stop: list[str] | None,
@@ -488,7 +488,7 @@ class ChatCompletionsProvider(Provider):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 1.0,
-        tools: list[ToolSpec] | None = None,
+        tools: Sequence[ToolSpec] | None = None,
         response_schema: type[BaseModel] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
@@ -549,7 +549,7 @@ class ChatCompletionsProvider(Provider):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 1.0,
-        tools: list[ToolSpec] | None = None,
+        tools: Sequence[ToolSpec] | None = None,
         response_schema: type[BaseModel] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
@@ -610,7 +610,7 @@ class ChatCompletionsProvider(Provider):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 1.0,
-        tools: list[ToolSpec] | None = None,
+        tools: Sequence[ToolSpec] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
         **kwargs: Any,
@@ -670,7 +670,7 @@ class ChatCompletionsProvider(Provider):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 1.0,
-        tools: list[ToolSpec] | None = None,
+        tools: Sequence[ToolSpec] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
         **kwargs: Any,
