@@ -54,6 +54,7 @@ def test_bad_api_key_raises_authentication_error(profile: ProviderProfile) -> No
         client.complete(
             [Message(role="user", content="hi")],
             model=profile.model,
+            provider=profile.name,
             max_tokens=16,
         )
 
@@ -89,5 +90,6 @@ def test_malformed_request_raises_vox_error(profile: ProviderProfile, client: Vo
         client.complete(
             [Message(role="user", content="hi")],
             model=profile.model,
+            provider=profile.name,
             max_tokens=-5,
         )

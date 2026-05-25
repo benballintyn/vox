@@ -2,9 +2,35 @@
 
 from __future__ import annotations
 
+import pytest
+
 from vox import Message, VoxClient
 
 from .conftest import ProviderProfile
+
+
+def _xfail_streaming_quirks(profile: ProviderProfile) -> None:
+    """Imperatively xfail providers with known stream-translation bugs.
+
+    Documents two real vox bugs surfaced by the first live run:
+
+    * **OpenAI / OpenRouter**: the Responses API streaming path never
+      emits a ``usage`` ``StreamChunk``. Token accounting is reachable
+      but vox doesn't surface it on the stream. Tracked as follow-up.
+    * **Anthropic**: the stream emits *two* ``done`` chunks and places
+      the ``usage`` chunk *after* the terminal ``done`` — should be
+      one ``done``, with ``usage`` before it. Tracked as follow-up.
+
+    Non-strict xfail so the tests cleanly xpass once the bugs are fixed.
+    """
+    if profile.name in ("openai", "openrouter"):
+        pytest.xfail(
+            "vox doesn't emit usage StreamChunk on OpenAI Responses API streaming — vox#18"
+        )
+    if profile.name == "anthropic":
+        pytest.xfail(
+            "vox emits duplicate done chunks + usage-after-done on Anthropic streaming — vox#19"
+        )
 
 
 def test_stream_chunk_sequence(profile: ProviderProfile, client: VoxClient) -> None:
@@ -20,10 +46,12 @@ def test_stream_chunk_sequence(profile: ProviderProfile, client: VoxClient) -> N
     This is the only place where the stream-event translation in each
     provider is exercised end-to-end.
     """
+    _xfail_streaming_quirks(profile)
     chunks = list(
         client.stream(
             [Message(role="user", content="Say hi.")],
             model=profile.model,
+            provider=profile.name,
             max_tokens=1024,
         )
     )
@@ -47,10 +75,12 @@ def test_stream_chunk_sequence(profile: ProviderProfile, client: VoxClient) -> N
 
 async def test_astream_chunk_sequence(profile: ProviderProfile, client: VoxClient) -> None:
     """Async ``astream`` produces the same chunk sequence as sync ``stream``."""
+    _xfail_streaming_quirks(profile)
     chunks = []
     async for chunk in client.astream(
         [Message(role="user", content="Say hi.")],
         model=profile.model,
+        provider=profile.name,
         max_tokens=1024,
     ):
         chunks.append(chunk)

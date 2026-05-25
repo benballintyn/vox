@@ -396,12 +396,21 @@ class GeminiProvider(Provider):
                 # Gemini's finish_reason is an enum; normalize to its string name.
                 raw_finish = getattr(fr, "name", str(fr)).lower()
 
+        # Gemini reports ``STOP`` even when the response contains tool
+        # calls — unlike OpenAI (``tool_calls``) and Anthropic
+        # (``tool_use``). Infer the normalized ``tool_calls`` reason from
+        # the parsed message so consumers can switch on a single field
+        # cross-provider.
+        normalized_finish = normalize_finish_reason(raw_finish)
+        if tool_calls and normalized_finish == "stop":
+            normalized_finish = "tool_calls"
+
         return CompletionResponse(
             message=message,
             usage=usage,
             provider="gemini",
             model=model,
-            finish_reason=normalize_finish_reason(raw_finish),
+            finish_reason=normalized_finish,
             raw_finish_reason=raw_finish,
             thinking=thinking_blocks or None,
             parsed=parsed,
@@ -478,7 +487,15 @@ class GeminiProvider(Provider):
         fr = getattr(candidate, "finish_reason", None)
         if fr:
             raw = getattr(fr, "name", str(fr)).lower()
-            results.append(StreamChunk(type="done", finish_reason=normalize_finish_reason(raw)))
+            normalized = normalize_finish_reason(raw)
+            # Gemini reports ``STOP`` even when the same chunk includes a
+            # function call. Mirror the non-streaming path's inference:
+            # if we just emitted a ``tool_call_start`` in this chunk and
+            # the normalized reason would otherwise be ``stop``, surface
+            # ``tool_calls`` instead — same cross-provider contract.
+            if normalized == "stop" and any(r.type == "tool_call_start" for r in results):
+                normalized = "tool_calls"
+            results.append(StreamChunk(type="done", finish_reason=normalized))
 
         return results
 
@@ -637,7 +654,14 @@ class GeminiProvider(Provider):
         """
         resolved_model = self._resolve_model(model)
         contents, system_instruction = self._translate_contents(messages)
+        # ``model=`` is required by ``_build_generate_config`` so it can
+        # detect Gemini 2.5 vs 3 for thinking-config translation. Missing
+        # here previously meant ``stream()`` and ``astream()`` raised
+        # TypeError before ever reaching the API — caught by the
+        # integration suite, since mocked unit tests stub at a different
+        # layer.
         config = self._build_generate_config(
+            model=resolved_model,
             max_tokens=max_tokens,
             temperature=temperature,
             response_schema=None,
@@ -695,7 +719,14 @@ class GeminiProvider(Provider):
         """
         resolved_model = self._resolve_model(model)
         contents, system_instruction = self._translate_contents(messages)
+        # ``model=`` is required by ``_build_generate_config`` so it can
+        # detect Gemini 2.5 vs 3 for thinking-config translation. Missing
+        # here previously meant ``stream()`` and ``astream()`` raised
+        # TypeError before ever reaching the API — caught by the
+        # integration suite, since mocked unit tests stub at a different
+        # layer.
         config = self._build_generate_config(
+            model=resolved_model,
             max_tokens=max_tokens,
             temperature=temperature,
             response_schema=None,

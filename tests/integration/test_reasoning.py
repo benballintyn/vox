@@ -42,8 +42,12 @@ def test_reasoning_low_engages(reasoning_profile: ProviderProfile, client: VoxCl
             )
         ],
         model=reasoning_profile.model,
+        provider=reasoning_profile.name,
         reasoning=ReasoningConfig(level="low"),
-        max_tokens=4096,
+        # Anthropic requires ``max_tokens > thinking.budget_tokens`` across
+        # the level sweep. The largest preset budget is ``high=32768`` —
+        # 40960 covers every level for every provider.
+        max_tokens=40960,
     )
     assert response.message.text
     assert response.usage.total_tokens > response.usage.prompt_tokens
@@ -64,8 +68,9 @@ def test_reasoning_level_sweep(
     response = client.complete(
         [Message(role="user", content="Briefly: what is 2 + 2?")],
         model=reasoning_profile.model,
+        provider=reasoning_profile.name,
         reasoning=ReasoningConfig(level=level),  # type: ignore[arg-type]
-        max_tokens=4096,
+        max_tokens=40960,
     )
     # Either visible text or a recognized finish_reason — proves we got a parsed response.
     assert response.message.text or response.finish_reason is not None
@@ -85,8 +90,12 @@ def test_thinking_blocks_exposed(reasoning_profile: ProviderProfile, client: Vox
     response = client.complete(
         [Message(role="user", content="What is 47 * 83? Think step by step.")],
         model=reasoning_profile.model,
+        provider=reasoning_profile.name,
         reasoning=ReasoningConfig(level="low"),
-        max_tokens=4096,
+        # Anthropic requires ``max_tokens > thinking.budget_tokens`` across
+        # the level sweep. The largest preset budget is ``high=32768`` —
+        # 40960 covers every level for every provider.
+        max_tokens=40960,
     )
     assert response.thinking is not None
     assert len(response.thinking) > 0

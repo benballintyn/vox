@@ -50,6 +50,7 @@ def test_flat_structured_output(profile: ProviderProfile, client: VoxClient) -> 
     response = client.complete(
         [Message(role="user", content="Tell me about Paris, France.")],
         model=profile.model,
+        provider=profile.name,
         response_schema=City,
         max_tokens=2048,
     )
@@ -76,6 +77,7 @@ def test_nested_list_enum_structured_output(profile: ProviderProfile, client: Vo
             )
         ],
         model=profile.model,
+        provider=profile.name,
         response_schema=CountryReport,
         max_tokens=2048,
     )

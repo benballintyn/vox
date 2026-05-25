@@ -37,6 +37,7 @@ def test_vision_identifies_red_square(
             )
         ],
         model=vision_profile.model,
+        provider=vision_profile.name,
         max_tokens=1024,
     )
     assert "red" in response.message.text.lower(), (
@@ -61,6 +62,7 @@ async def test_vision_async_parity(
             )
         ],
         model=vision_profile.model,
+        provider=vision_profile.name,
         max_tokens=1024,
     )
     assert "red" in response.message.text.lower()

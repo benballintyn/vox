@@ -22,6 +22,7 @@ def test_complete_returns_normalized_response(profile: ProviderProfile, client: 
     response = client.complete(
         [Message(role="user", content="Say hi.")],
         model=profile.model,
+        provider=profile.name,
         max_tokens=1024,
     )
 
@@ -47,6 +48,7 @@ async def test_acomplete_parity(profile: ProviderProfile, client: VoxClient) -> 
     response = await client.acomplete(
         [Message(role="user", content="Say hi.")],
         model=profile.model,
+        provider=profile.name,
         max_tokens=1024,
     )
 
@@ -71,6 +73,7 @@ def test_pong_smoke(profile: ProviderProfile, client: VoxClient) -> None:
             )
         ],
         model=profile.model,
+        provider=profile.name,
         max_tokens=1024,
     )
     assert "pong" in response.message.text.lower()
@@ -92,10 +95,14 @@ def test_finish_reason_length(profile: ProviderProfile, client: VoxClient) -> No
     if profile.requires_disable_reasoning_for_length:
         reasoning = ReasoningConfig(openai=OpenAIReasoning(effort="minimal"))
 
+    # OpenAI Responses API requires max_output_tokens >= 16, so 16 is the
+    # portable floor here. Still tiny enough to force length on any
+    # provider for a "long story" prompt.
     response = client.complete(
         [Message(role="user", content="Tell me a long story about robots.")],
         model=profile.model,
-        max_tokens=5,
+        provider=profile.name,
+        max_tokens=16,
         reasoning=reasoning,
     )
     assert response.finish_reason == "length"
@@ -116,6 +123,7 @@ def test_multi_turn_conversation(profile: ProviderProfile, client: VoxClient) ->
             Message(role="user", content="And of Spain?"),
         ],
         model=profile.model,
+        provider=profile.name,
         max_tokens=1024,
     )
     assert response.message.text
