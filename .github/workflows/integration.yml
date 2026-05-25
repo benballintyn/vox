@@ -1,0 +1,80 @@
+name: Integration Tests
+
+# Live provider integration tests. Hits real OpenAI / Anthropic / Gemini /
+# OpenRouter APIs with tiny prompts on cheap models. Costs cents per run.
+#
+# Trigger: **manual only** (workflow_dispatch).
+#
+# The intended cadence is "run before cutting a release" — dispatch this
+# workflow against the standing release-please branch
+# (``release-please--branches--main``) right before merging the release
+# PR. That validates the cumulative set of provider-touching changes
+# since the last release against live APIs.
+#
+# Why not on pull_request: there are ~90+ live API calls per run, taking
+# 5-7 minutes per provider. Running on every push to every PR is too
+# slow, too noisy, and unnecessary — every change reaches PyPI users
+# only after passing through a release PR, so the release-PR gate is
+# the right place to put the check.
+#
+# Why not on push:main: same reason — main's commits will all be
+# replayed in the next release PR's accumulated diff.
+#
+# How to dispatch:
+#   1. github.com/benballintyn/vox → Actions → "Integration Tests"
+#      → "Run workflow" → pick branch.
+#   2. Or via CLI: ``gh workflow run integration.yml --ref <branch>``.
+#
+# Fork PRs run with no secrets when dispatched manually — every
+# provider's tests skip cleanly (the conftest gates on env-var
+# presence), so the job completes green-with-skips.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Concurrency: only one dispatched integration run at a time. Live API
+# calls are slow + cost real money; no point starting a duplicate.
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integration:
+    name: integration
+    runs-on: ubuntu-latest
+    # Generous timeout — 94 tests × ~3s + retries on flakes. Real runs are
+    # ~5-7 min; the ceiling catches a hung provider call.
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        run: pipx install poetry
+
+      - name: Cache virtualenv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-integration-${{ runner.os }}-py3.12-${{ hashFiles('poetry.lock') }}
+
+      - name: Install dependencies
+        run: poetry install --with dev --all-extras --no-interaction
+
+      - name: Run integration tests
+        # Missing secrets surface as missing env vars; the conftest skips
+        # the matching profile cleanly. So a fork-branch dispatch (no
+        # secrets) produces a green job with everything skipped.
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: poetry run pytest tests/integration/ -m integration -v --tb=short
