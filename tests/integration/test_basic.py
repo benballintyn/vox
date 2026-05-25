@@ -95,14 +95,19 @@ def test_finish_reason_length(profile: ProviderProfile, client: VoxClient) -> No
     if profile.requires_disable_reasoning_for_length:
         reasoning = ReasoningConfig(openai=OpenAIReasoning(effort="minimal"))
 
-    # OpenAI Responses API requires max_output_tokens >= 16, so 16 is the
-    # portable floor here. Still tiny enough to force length on any
-    # provider for a "long story" prompt.
+    # OpenAI Responses API requires max_output_tokens >= 16. We use 64
+    # to give reasoning models (gpt-5 family always emits some reasoning
+    # tokens, even at effort=minimal) enough headroom to also produce at
+    # least one visible output token — on the first live run, max=16
+    # caused gpt-5-mini to return 500s on every retry, likely because
+    # the reasoning floor + minimum visible output couldn't fit.
+    # 64 is still tiny enough to force ``length`` on any provider for a
+    # "long story" prompt.
     response = client.complete(
         [Message(role="user", content="Tell me a long story about robots.")],
         model=profile.model,
         provider=profile.name,
-        max_tokens=16,
+        max_tokens=64,
         reasoning=reasoning,
     )
     assert response.finish_reason == "length"

@@ -23,9 +23,12 @@ def _xfail_streaming_quirks(profile: ProviderProfile) -> None:
 
     Non-strict xfail so the tests cleanly xpass once the bugs are fixed.
     """
-    if profile.name in ("openai", "openrouter"):
+    if profile.name in ("openai", "openrouter", "gemini"):
+        # Same underlying gap on all three: vox's stream translator
+        # doesn't yield a ``type="usage"`` StreamChunk. Filed against
+        # OpenAI / Responses API but Gemini exhibits the same shape.
         pytest.xfail(
-            "vox doesn't emit usage StreamChunk on OpenAI Responses API streaming — vox#18"
+            "vox doesn't emit usage StreamChunk on this provider's streaming path — vox#18"
         )
     if profile.name == "anthropic":
         pytest.xfail(
