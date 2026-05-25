@@ -44,6 +44,12 @@ def _make_gemini_response(
             part = MagicMock()
             part.text = None
             part.thought = False
+            # MagicMock auto-creates attributes, so explicitly pin
+            # ``thought_signature`` to whatever the test specifies
+            # (``None`` by default) — otherwise vox's
+            # ``getattr(part, "thought_signature", None)`` would receive
+            # an auto-generated MagicMock and treat it as a real value.
+            part.thought_signature = fc.get("thought_signature")
             mock_fc = MagicMock()
             mock_fc.name = fc["name"]
             mock_fc.args = fc.get("args", {})
@@ -94,6 +100,73 @@ class TestMessageTranslation:
         # Verify Content was created with role="user"
         types_mock.Content.assert_called()
 
+    @patch("vox.providers.gemini._import_genai_types")
+    def test_assistant_tool_call_replays_thought_signature(
+        self, mock_types, provider: GeminiProvider
+    ) -> None:
+        """vox#22 — outbound function_call Parts must carry ``thought_signature``.
+
+        When a previously-issued ``ToolCallData`` is sent back, the
+        provider replays the captured signature on the outgoing Part.
+        Without it, Gemini rejects the inbound request when thinking
+        is enabled.
+        """
+        from vox.models.messages import ToolCallData
+
+        types_mock = MagicMock()
+        mock_types.return_value = types_mock
+
+        messages = [
+            Message(
+                role="assistant",
+                tool_calls=[
+                    ToolCallData(
+                        id="call_abc",
+                        name="weather",
+                        arguments={"city": "NYC"},
+                        provider_state={"gemini_thought_signature": b"opaque-bytes"},
+                    ),
+                ],
+            ),
+        ]
+        provider._translate_contents(messages)
+
+        # types.Part(...) was called with the signature as a kwarg.
+        part_call_kwargs = [c.kwargs for c in types_mock.Part.call_args_list]
+        sig_call = next(
+            (kw for kw in part_call_kwargs if "thought_signature" in kw),
+            None,
+        )
+        assert sig_call is not None, "Part was not constructed with thought_signature"
+        assert sig_call["thought_signature"] == b"opaque-bytes"
+
+    @patch("vox.providers.gemini._import_genai_types")
+    def test_assistant_tool_call_omits_signature_when_absent(
+        self, mock_types, provider: GeminiProvider
+    ) -> None:
+        """Without provider_state, the outbound Part has no ``thought_signature``.
+
+        Lets consumer-built ToolCallData round-trip cleanly on the first
+        turn (no signature exists yet); subsequent turns rely on the
+        provider having minted the call and stashed the signature.
+        """
+        from vox.models.messages import ToolCallData
+
+        types_mock = MagicMock()
+        mock_types.return_value = types_mock
+
+        messages = [
+            Message(
+                role="assistant",
+                tool_calls=[
+                    ToolCallData(id="call_abc", name="weather", arguments={}),
+                ],
+            ),
+        ]
+        provider._translate_contents(messages)
+        part_call_kwargs = [c.kwargs for c in types_mock.Part.call_args_list]
+        assert not any("thought_signature" in kw for kw in part_call_kwargs)
+
 
 class TestResponseTranslation:
     """Tests for Gemini response translation."""
@@ -113,6 +186,30 @@ class TestResponseTranslation:
         result = provider._translate_response(mock_resp, "gemini-2.5-pro")
         assert result.message.tool_calls is not None
         assert result.message.tool_calls[0].name == "weather"
+        # No thought_signature on the source part → no provider_state.
+        assert result.message.tool_calls[0].provider_state is None
+
+    def test_function_call_captures_thought_signature(self, provider: GeminiProvider) -> None:
+        """vox#22 — capture part-level ``thought_signature`` into provider_state.
+
+        Gemini requires the signature on function_call parts when
+        thinking is enabled. vox preserves it through ``provider_state``
+        so subsequent turns can replay it.
+        """
+        mock_resp = _make_gemini_response(
+            text="",
+            function_calls=[
+                {
+                    "name": "weather",
+                    "args": {"city": "NYC"},
+                    "thought_signature": b"opaque-encrypted-bytes",
+                },
+            ],
+        )
+        result = provider._translate_response(mock_resp, "gemini-2.5-pro")
+        assert result.message.tool_calls is not None
+        tc = result.message.tool_calls[0]
+        assert tc.provider_state == {"gemini_thought_signature": b"opaque-encrypted-bytes"}
 
     def test_thinking_response(self, provider: GeminiProvider) -> None:
         mock_resp = _make_gemini_response(

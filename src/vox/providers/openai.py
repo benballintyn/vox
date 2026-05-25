@@ -166,13 +166,24 @@ class OpenAIProvider(Provider):
                             "content": [{"type": "output_text", "text": msg.text}],
                         }
                     )
-                # Add tool calls
+                # Add tool calls. The Responses API distinguishes two
+                # IDs per call: ``id`` (the function_call *output item*
+                # ID, prefixed ``fc_*``) and ``call_id`` (the cross-turn
+                # tool-call reference, prefixed ``call_*``). The
+                # *output item* ID is what the API expects on
+                # inbound ``input[*].id``. vox preserves it in
+                # ``ToolCallData.provider_state["openai_fc_id"]`` when
+                # the original response came from this provider; fall
+                # back to ``tc.id`` for ToolCallData built from scratch
+                # (e.g. tests) — those flows aren't sending back a
+                # previously-issued ID anyway.
                 if msg.tool_calls:
                     for tc in msg.tool_calls:
+                        fc_id = (tc.provider_state or {}).get("openai_fc_id", tc.id)
                         items.append(
                             {
                                 "type": "function_call",
-                                "id": tc.id,
+                                "id": fc_id,
                                 "call_id": tc.id,
                                 "name": tc.name,
                                 "arguments": json.dumps(tc.arguments),
@@ -383,11 +394,19 @@ class OpenAIProvider(Provider):
 
             elif item_type == "function_call":
                 args_str = getattr(item, "arguments", "{}")
+                # Capture both IDs: ``call_id`` is the public reference
+                # consumers use in tool result messages; ``id`` is the
+                # function_call output-item ID the Responses API
+                # demands on inbound assistant messages. See the
+                # outbound translator for why both are needed.
+                call_id = getattr(item, "call_id", None) or item.id
+                fc_id = getattr(item, "id", None) or call_id
                 tool_calls.append(
                     ToolCallData(
-                        id=getattr(item, "call_id", item.id),
+                        id=call_id,
                         name=item.name,
                         arguments=json.loads(args_str) if args_str else {},
+                        provider_state={"openai_fc_id": fc_id},
                     )
                 )
 
@@ -561,9 +580,12 @@ class OpenAIProvider(Provider):
                 # ``str(...)`` coercion: getattrs return ``Any``, so the
                 # ``or`` chain widens to a nullable in mypy's eyes.
                 call_id = str(getattr(item, "call_id", None) or getattr(item, "id", "") or "")
-                item_id = str(getattr(item, "id", None) or call_id)
-                # Buffer the mapping for upcoming arguments.delta events.
-                state.setdefault("item_id_to_call_id", {})[item_id] = call_id
+                fc_id = str(getattr(item, "id", None) or call_id)
+                # Buffer the fc_* → call_* mapping for upcoming
+                # arguments.delta events (vox#20) — those events carry
+                # only ``item_id`` (the fc_*), but consumers correlate
+                # via the call_* that landed on this start chunk.
+                state.setdefault("item_id_to_call_id", {})[fc_id] = call_id
                 return [
                     StreamChunk(
                         type="tool_call_start",
@@ -571,6 +593,10 @@ class OpenAIProvider(Provider):
                             id=call_id,
                             name=getattr(item, "name", ""),
                             arguments={},
+                            # Preserve fc_* so the round-trip outbound
+                            # translator can use it as ``input[*].id`` on
+                            # subsequent turns (vox#17).
+                            provider_state={"openai_fc_id": fc_id},
                         ),
                     )
                 ]

@@ -94,23 +94,16 @@ def test_tool_round_trip(profile: ProviderProfile, client: VoxClient) -> None:
     provider rejects turn 2 and this test fails. That's the value.
     """
     if profile.name == "openai":
-        # OpenAI Responses API rejects tool_call IDs starting with
-        # ``call_*`` on the inbound assistant message — it expects the
-        # function_call item ID (``fc_*``). vox stores ``call_id`` in
-        # ``ToolCallData.id`` so it round-trips through the *Chat
-        # Completions* API fine, but not through the Responses API.
-        # Non-strict xfail so it xpasses cleanly once the fix lands.
+        # The vox#17 fix (correct fc_* ID on inbound) is in place, but
+        # gpt-5-mini reasons before calling tools and the Responses API
+        # *also* requires the preceding ``rs_*`` reasoning item to be
+        # replayed alongside the function_call. vox doesn't preserve
+        # reasoning items in the assistant Message yet. Different layer
+        # from #17, tracked separately. Non-strict xfail.
         pytest.xfail(
-            "OpenAI Responses API rejects call_* tool_call IDs on inbound; expects fc_* — vox#17"
-        )
-    if profile.name == "gemini":
-        # Gemini's tool round-trip now requires a ``thought_signature``
-        # field on returned function_call parts; without it the API
-        # rejects the inbound assistant message. vox doesn't extract or
-        # replay thought_signature.
-        pytest.xfail(
-            "Gemini requires thought_signature on returned function_call "
-            "parts; vox doesn't preserve it — vox#22"
+            "OpenAI Responses API also requires the preceding rs_* "
+            "reasoning item alongside the function_call on round-trip — "
+            "vox#25"
         )
     history: list[Message] = [Message(role="user", content=FORCE_PROMPT)]
 

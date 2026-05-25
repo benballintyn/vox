@@ -30,11 +30,31 @@ ContentPart = TextContent | ImageContent
 
 
 class ToolCallData(BaseModel):
-    """A tool call made by the model, embedded in a message."""
+    """A tool call made by the model, embedded in a message.
+
+    Args:
+        id: Public, cross-provider identifier for the call. Consumers
+            reference this in the ``tool_call_id`` of a ``ToolResult`` /
+            tool-role ``Message`` when replying.
+        name: Tool/function name.
+        arguments: Parsed arguments as a dict.
+        provider_state: Opaque per-provider state attached to the call
+            by the provider that produced it. Each provider's adapter
+            populates its own keys (e.g. ``openai_fc_id`` carries the
+            ``fc_*`` item ID needed when round-tripping through the
+            Responses API; ``gemini_thought_signature`` carries the
+            encrypted bytes Gemini requires on subsequent turns). The
+            *consumer* never needs to read or modify this — pass the
+            ``ToolCallData`` back unchanged in the assistant message
+            history and the provider that minted it will use what it
+            stored. Built-from-scratch ``ToolCallData`` (e.g. in tests)
+            can leave this ``None``.
+    """
 
     id: str
     name: str
     arguments: dict[str, Any]
+    provider_state: dict[str, Any] | None = None
 
 
 class Message(BaseModel):
