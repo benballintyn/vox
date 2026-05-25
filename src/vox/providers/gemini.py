@@ -136,17 +136,29 @@ class GeminiProvider(Provider):
             role = "model" if msg.role == "assistant" else "user"
             parts = self._translate_parts(msg)
 
-            # Add tool call parts for assistant messages
+            # Add tool call parts for assistant messages. Gemini
+            # requires a ``thought_signature`` on returned function_call
+            # parts when the model emitted one — without it the API
+            # rejects the inbound message. vox preserves the signature
+            # in ``ToolCallData.provider_state["gemini_thought_signature"]``
+            # for calls that originated from this provider; for calls
+            # built from scratch (no provider_state), we omit the field
+            # and let Gemini fall back to its degraded-but-functional
+            # path (only the first turn; subsequent turns with thinking
+            # enabled require the signature).
             if msg.tool_calls:
                 for tc in msg.tool_calls:
-                    parts.append(
-                        types.Part(
-                            function_call=types.FunctionCall(
-                                name=tc.name,
-                                args=tc.arguments,
-                            )
+                    state = tc.provider_state or {}
+                    signature = state.get("gemini_thought_signature")
+                    part_kwargs: dict[str, Any] = {
+                        "function_call": types.FunctionCall(
+                            name=tc.name,
+                            args=tc.arguments,
                         )
-                    )
+                    }
+                    if signature is not None:
+                        part_kwargs["thought_signature"] = signature
+                    parts.append(types.Part(**part_kwargs))
 
             contents.append(types.Content(role=role, parts=parts))
 
@@ -361,11 +373,17 @@ class GeminiProvider(Provider):
                         text_parts.append(part.text)
                 elif hasattr(part, "function_call") and part.function_call:
                     fc = part.function_call
+                    # Capture the part-level ``thought_signature`` so it
+                    # can be replayed on subsequent turns — required by
+                    # Gemini when thinking is enabled with tools.
+                    sig = getattr(part, "thought_signature", None)
+                    state = {"gemini_thought_signature": sig} if sig is not None else None
                     tool_calls.append(
                         ToolCallData(
                             id=f"call_{uuid.uuid4().hex[:8]}",
                             name=fc.name,
                             arguments=dict(fc.args) if fc.args else {},
+                            provider_state=state,
                         )
                     )
 
@@ -472,6 +490,10 @@ class GeminiProvider(Provider):
                         results.append(StreamChunk(type="text", text=part.text))
                 elif hasattr(part, "function_call") and part.function_call:
                     fc = part.function_call
+                    # Same thought_signature capture as the non-streaming
+                    # path — preserved for outbound round-trips.
+                    sig = getattr(part, "thought_signature", None)
+                    state = {"gemini_thought_signature": sig} if sig is not None else None
                     results.append(
                         StreamChunk(
                             type="tool_call_start",
@@ -479,6 +501,7 @@ class GeminiProvider(Provider):
                                 id=f"call_{uuid.uuid4().hex[:8]}",
                                 name=fc.name,
                                 arguments=dict(fc.args) if fc.args else {},
+                                provider_state=state,
                             ),
                         )
                     )

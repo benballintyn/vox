@@ -62,6 +62,57 @@ class TestMessageTranslation:
         assert any(i.get("type") == "message" for i in items)
         assert any(i.get("type") == "function_call" for i in items)
 
+    def test_assistant_tool_call_uses_fc_id_from_provider_state(
+        self, provider: OpenAIProvider
+    ) -> None:
+        """vox#17 — Responses API requires fc_* on ``input[*].id``.
+
+        When a previously-issued ToolCallData is sent back, the
+        ``id`` field on the outbound function_call item must be the
+        original ``fc_*`` (function_call item ID), not the ``call_*``
+        cross-turn reference. vox preserves the former in
+        ``provider_state["openai_fc_id"]``.
+        """
+        messages = [
+            Message(
+                role="assistant",
+                tool_calls=[
+                    ToolCallData(
+                        id="call_xyz",
+                        name="weather",
+                        arguments={"city": "NYC"},
+                        provider_state={"openai_fc_id": "fc_xyz"},
+                    ),
+                ],
+            ),
+        ]
+        items, _ = provider._translate_input(messages)
+        fc_item = next(i for i in items if i.get("type") == "function_call")
+        assert fc_item["id"] == "fc_xyz", "outbound id must be the fc_* value"
+        assert fc_item["call_id"] == "call_xyz", "call_id must remain the public id"
+
+    def test_assistant_tool_call_falls_back_to_id_without_provider_state(
+        self, provider: OpenAIProvider
+    ) -> None:
+        """Tool calls built from scratch (no provider_state) fall back to ``tc.id``.
+
+        These flows aren't round-tripping a previously-issued call, so
+        there's no original fc_id to preserve — using ``tc.id`` for both
+        fields matches the pre-vox#17 behavior.
+        """
+        messages = [
+            Message(
+                role="assistant",
+                tool_calls=[
+                    ToolCallData(id="call_xyz", name="weather", arguments={}),
+                ],
+            ),
+        ]
+        items, _ = provider._translate_input(messages)
+        fc_item = next(i for i in items if i.get("type") == "function_call")
+        assert fc_item["id"] == "call_xyz"
+        assert fc_item["call_id"] == "call_xyz"
+
 
 class TestToolTranslation:
     """Tests for Responses API tool translation."""
@@ -104,6 +155,44 @@ class TestResponseTranslation:
         assert len(result.message.tool_calls) == 1
         assert result.message.tool_calls[0].name == "weather"
         assert result.message.tool_calls[0].arguments == {"city": "NYC"}
+
+    def test_function_call_captures_both_ids(self, provider: OpenAIProvider) -> None:
+        """vox#17 — capture the distinct fc_* and call_* IDs from the response.
+
+        The Responses API emits each function call with two IDs:
+        ``id`` (``fc_*``, the output-item ID) and ``call_id`` (``call_*``,
+        the cross-turn reference). vox exposes ``call_id`` as the public
+        ``ToolCallData.id`` (consumers reference it in tool result
+        messages) and stashes ``fc_id`` in ``provider_state`` for
+        round-tripping. The default mock helper sets both to the same
+        string, so this test builds the mock directly.
+        """
+        from unittest.mock import MagicMock
+
+        fc_item = MagicMock()
+        fc_item.type = "function_call"
+        fc_item.id = "fc_abc"
+        fc_item.call_id = "call_abc"
+        fc_item.name = "weather"
+        fc_item.arguments = '{"city": "NYC"}'
+
+        usage = MagicMock()
+        usage.input_tokens = 5
+        usage.output_tokens = 3
+        usage.reasoning_tokens = 0
+
+        mock_resp = MagicMock()
+        mock_resp.output = [fc_item]
+        mock_resp.usage = usage
+        mock_resp.status = "completed"
+        mock_resp.id = "resp_test"
+        mock_resp.incomplete_details = None
+
+        result = provider._translate_response(mock_resp, "gpt-4o")
+        assert result.message.tool_calls is not None
+        tc = result.message.tool_calls[0]
+        assert tc.id == "call_abc", "public id is the call_* value"
+        assert tc.provider_state == {"openai_fc_id": "fc_abc"}
 
 
 class TestComplete:
