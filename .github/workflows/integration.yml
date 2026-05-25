@@ -1,0 +1,68 @@
+name: Integration Tests
+
+# Live provider integration tests. Hits real OpenAI / Anthropic / Gemini /
+# OpenRouter APIs with tiny prompts on cheap models. Costs cents per run.
+#
+# Triggers:
+#   - pull_request (against main): every PR run gates merge via branch
+#     protection (the "integration" check is required in the protect-main
+#     ruleset). Fork PRs run with no secrets — every provider is skipped
+#     and the job completes green, which is the intended behaviour (GitHub
+#     deliberately withholds secrets from fork-triggered runs).
+#   - workflow_dispatch: manual run, useful for debugging or "introducing"
+#     the check name to the required-checks picker on first install.
+#
+# Not on push:main — the squash from a merged PR doesn't need to re-run
+# what the PR's own check already validated.
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Cancel in-progress runs for the same PR when a new commit arrives.
+# Live API calls are slow + cost real money; no point finishing a stale run.
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integration:
+    name: integration
+    runs-on: ubuntu-latest
+    # Generous timeout — 94 tests × ~3s + retries on flakes. Real runs are
+    # ~5-7 min; the ceiling catches a hung provider call.
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        run: pipx install poetry
+
+      - name: Cache virtualenv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-integration-${{ runner.os }}-py3.12-${{ hashFiles('poetry.lock') }}
+
+      - name: Install dependencies
+        run: poetry install --with dev --all-extras --no-interaction
+
+      - name: Run integration tests
+        # Missing secrets surface as missing env vars; the conftest skips
+        # the matching profile cleanly. So fork PRs (which don't see
+        # secrets) produce a green job with everything skipped.
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: poetry run pytest tests/integration/ -m integration -v --tb=short

@@ -52,6 +52,10 @@ pytest-cov = "^6.0.0"
 coverage = "^7.6.10"
 pytest-asyncio = "^0.25.2"
 pytest-mock = "^3.14.0"
+# Reruns flaky integration tests on transient network/5xx errors so a
+# blip doesn't fail the suite. Applied globally to integration tests
+# only, via tests/integration/conftest.py.
+pytest-rerunfailures = "^15.0"
 ruff = ">=0.4"
 mypy = "^2.1.0"
 
