@@ -3,28 +3,40 @@ name: Integration Tests
 # Live provider integration tests. Hits real OpenAI / Anthropic / Gemini /
 # OpenRouter APIs with tiny prompts on cheap models. Costs cents per run.
 #
-# Triggers:
-#   - pull_request (against main): every PR run gates merge via branch
-#     protection (the "integration" check is required in the protect-main
-#     ruleset). Fork PRs run with no secrets — every provider is skipped
-#     and the job completes green, which is the intended behaviour (GitHub
-#     deliberately withholds secrets from fork-triggered runs).
-#   - workflow_dispatch: manual run, useful for debugging or "introducing"
-#     the check name to the required-checks picker on first install.
+# Trigger: **manual only** (workflow_dispatch).
 #
-# Not on push:main — the squash from a merged PR doesn't need to re-run
-# what the PR's own check already validated.
+# The intended cadence is "run before cutting a release" — dispatch this
+# workflow against the standing release-please branch
+# (``release-please--branches--main``) right before merging the release
+# PR. That validates the cumulative set of provider-touching changes
+# since the last release against live APIs.
+#
+# Why not on pull_request: there are ~90+ live API calls per run, taking
+# 5-7 minutes per provider. Running on every push to every PR is too
+# slow, too noisy, and unnecessary — every change reaches PyPI users
+# only after passing through a release PR, so the release-PR gate is
+# the right place to put the check.
+#
+# Why not on push:main: same reason — main's commits will all be
+# replayed in the next release PR's accumulated diff.
+#
+# How to dispatch:
+#   1. github.com/benballintyn/vox → Actions → "Integration Tests"
+#      → "Run workflow" → pick branch.
+#   2. Or via CLI: ``gh workflow run integration.yml --ref <branch>``.
+#
+# Fork PRs run with no secrets when dispatched manually — every
+# provider's tests skip cleanly (the conftest gates on env-var
+# presence), so the job completes green-with-skips.
 
 on:
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# Cancel in-progress runs for the same PR when a new commit arrives.
-# Live API calls are slow + cost real money; no point finishing a stale run.
+# Concurrency: only one dispatched integration run at a time. Live API
+# calls are slow + cost real money; no point starting a duplicate.
 concurrency:
   group: integration-${{ github.ref }}
   cancel-in-progress: true
@@ -58,8 +70,8 @@ jobs:
 
       - name: Run integration tests
         # Missing secrets surface as missing env vars; the conftest skips
-        # the matching profile cleanly. So fork PRs (which don't see
-        # secrets) produce a green job with everything skipped.
+        # the matching profile cleanly. So a fork-branch dispatch (no
+        # secrets) produces a green job with everything skipped.
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
