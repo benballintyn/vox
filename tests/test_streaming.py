@@ -200,6 +200,25 @@ class TestChatCompletionsStreaming:
         chunks = chat_completions_provider._translate_stream_chunk(chunk)
         assert chunks == []
 
+    def test_finish_reason_emitted_only_once_per_stream(
+        self, chat_completions_provider: ChatCompletionsProvider
+    ) -> None:
+        """Some proxied providers (e.g. OpenRouter) send ``finish_reason`` on
+        more than one chunk near end-of-stream. vox dedups so consumers see
+        exactly one ``done`` chunk per stream.
+        """
+        state: dict = {}
+        first = chat_completions_provider._translate_stream_chunk(
+            _cc_chunk(finish_reason="stop"), state
+        )
+        second = chat_completions_provider._translate_stream_chunk(
+            _cc_chunk(finish_reason="stop"), state
+        )
+        assert any(c.type == "done" for c in first)
+        assert not any(c.type == "done" for c in second), (
+            "vox emitted a second 'done' chunk; state-based dedup didn't take"
+        )
+
 
 # ───────────────────────────────────────────────────────────────────────────
 #  Anthropic streaming

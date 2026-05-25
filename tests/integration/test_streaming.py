@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
+import pytest
+
 from vox import Message, VoxClient
 
 from .conftest import ProviderProfile
+
+# OpenRouter doesn't surface a usage chunk on the proxied Chat
+# Completions stream, even with ``stream_options.include_usage=True``
+# set on the request. Tracked as vox#27 (needs an OpenRouter-specific
+# usage-extraction path, probably reading the response headers). For
+# all other providers the rest of the streaming contract holds.
+_NO_USAGE_CHUNK_PROVIDERS = {"openrouter"}
 
 
 def test_stream_chunk_sequence(profile: ProviderProfile, client: VoxClient) -> None:
@@ -13,9 +22,10 @@ def test_stream_chunk_sequence(profile: ProviderProfile, client: VoxClient) -> N
     Structural contract for every provider:
 
     * at least one ``text`` chunk (the response had visible content),
-    * at least one ``usage`` chunk (token accounting arrived),
     * exactly one terminal ``done`` chunk carrying a ``finish_reason``,
-    * concatenated text deltas are non-empty.
+    * concatenated text deltas are non-empty,
+    * a ``usage`` chunk arrives before ``done`` — except on providers
+      with a documented usage gap (currently OpenRouter, vox#27).
 
     This is the only place where the stream-event translation in each
     provider is exercised end-to-end.
@@ -31,7 +41,6 @@ def test_stream_chunk_sequence(profile: ProviderProfile, client: VoxClient) -> N
 
     types = [c.type for c in chunks]
     assert "text" in types, f"no text chunks; got {types}"
-    assert "usage" in types, f"no usage chunk; got {types}"
     assert types.count("done") == 1, f"expected exactly one done chunk; got {types}"
     assert types[-1] == "done", f"done chunk must be last; got {types}"
 
@@ -41,6 +50,9 @@ def test_stream_chunk_sequence(profile: ProviderProfile, client: VoxClient) -> N
     done = next(c for c in chunks if c.type == "done")
     assert done.finish_reason, "done chunk missing finish_reason"
 
+    if profile.name in _NO_USAGE_CHUNK_PROVIDERS:
+        pytest.xfail(f"{profile.name} doesn't surface a usage chunk on streaming — vox#27")
+    assert "usage" in types, f"no usage chunk; got {types}"
     usage = next(c for c in chunks if c.type == "usage")
     assert usage.usage is not None
     assert usage.usage.prompt_tokens > 0
@@ -59,7 +71,10 @@ async def test_astream_chunk_sequence(profile: ProviderProfile, client: VoxClien
 
     types = [c.type for c in chunks]
     assert "text" in types
-    assert "usage" in types
     assert types.count("done") == 1
     assert types[-1] == "done"
     assert "".join(c.text for c in chunks if c.type == "text")
+
+    if profile.name in _NO_USAGE_CHUNK_PROVIDERS:
+        pytest.xfail(f"{profile.name} doesn't surface a usage chunk on streaming — vox#27")
+    assert "usage" in types

@@ -484,8 +484,14 @@ class ChatCompletionsProvider(Provider):
         if delta.content:
             chunks.append(StreamChunk(type="text", text=delta.content))
 
-        # Finish reason (emitted last for this chunk if present)
-        if choice.finish_reason:
+        # Finish reason (emitted last for this chunk if present). Some
+        # providers proxied through this path (OpenRouter especially)
+        # send ``finish_reason`` on more than one stream chunk near the
+        # end of the response, which previously produced multiple
+        # ``done`` chunks back-to-back. Dedup via per-stream state —
+        # only the first ``finish_reason`` we see becomes a ``done``.
+        if choice.finish_reason and not state.get("done_emitted"):
+            state["done_emitted"] = True
             chunks.append(
                 StreamChunk(
                     type="done",
