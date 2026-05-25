@@ -160,15 +160,16 @@ def test_streaming_tool_call(profile: ProviderProfile, client: VoxClient) -> Non
     and verifies the final arguments — taken from start + deltas — parse
     as a JSON object containing the expected key.
     """
-    if profile.name in ("openai", "anthropic"):
-        # On OpenAI (Responses API) and Anthropic streaming, vox emits a
+    if profile.name in ("openai", "anthropic", "openrouter"):
+        # On OpenAI (Responses API), OpenRouter (Chat Completions via
+        # _chat_completions.py), and Anthropic streaming, vox emits a
         # ``tool_call_start`` with empty arguments, then either no
         # ``tool_call_delta`` chunks or chunks whose ``tool_call_id``
         # doesn't correlate with the start. Accumulated args end up ``{}``.
-        # Tracked as vox bug — see follow-up issue.
+        # Tracked as vox#20.
         pytest.xfail(
             "vox streaming tool_call_delta accumulation broken on OpenAI / "
-            "Anthropic — args end up empty — vox#20"
+            "Anthropic / OpenRouter — args end up empty — vox#20"
         )
     chunks = list(
         client.stream(

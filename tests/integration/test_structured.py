@@ -17,16 +17,19 @@ from .conftest import ProviderProfile
 
 
 def _xfail_openai_strict_schema(profile: ProviderProfile) -> None:
-    """OpenAI Responses API requires strict-mode JSON Schema.
+    """OpenAI strict-mode JSON Schema requirement.
 
     Schemas need ``additionalProperties: false`` on every object plus
     every property in ``required``. vox's structured-output translator
     passes ``model_json_schema()`` through unmodified, so OpenAI rejects.
+    OpenRouter routes through the same OpenAI-flavored endpoint when
+    serving ``openai/*`` models, so the same gap fires there.
+
     Tracked as vox#21. Non-strict xfail so it cleanly xpasses once fixed.
     """
-    if profile.name == "openai":
+    if profile.name in ("openai", "openrouter"):
         pytest.xfail(
-            "OpenAI Responses API requires additionalProperties: false on "
+            "OpenAI requires additionalProperties: false on response_format "
             "schemas; vox doesn't inject it — vox#21"
         )
 
