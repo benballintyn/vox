@@ -8,30 +8,11 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-import pytest
 from pydantic import BaseModel, Field
 
 from vox import Message, VoxClient
 
 from .conftest import ProviderProfile
-
-
-def _xfail_openai_strict_schema(profile: ProviderProfile) -> None:
-    """OpenAI strict-mode JSON Schema requirement.
-
-    Schemas need ``additionalProperties: false`` on every object plus
-    every property in ``required``. vox's structured-output translator
-    passes ``model_json_schema()`` through unmodified, so OpenAI rejects.
-    OpenRouter routes through the same OpenAI-flavored endpoint when
-    serving ``openai/*`` models, so the same gap fires there.
-
-    Tracked as vox#21. Non-strict xfail so it cleanly xpasses once fixed.
-    """
-    if profile.name in ("openai", "openrouter"):
-        pytest.xfail(
-            "OpenAI requires additionalProperties: false on response_format "
-            "schemas; vox doesn't inject it — vox#21"
-        )
 
 
 class City(BaseModel):
@@ -66,7 +47,6 @@ def test_flat_structured_output(profile: ProviderProfile, client: VoxClient) -> 
     Asserts structure (correct type, fields populated) only — never on
     the model's choice of values.
     """
-    _xfail_openai_strict_schema(profile)
     response = client.complete(
         [Message(role="user", content="Tell me about Paris, France.")],
         model=profile.model,
@@ -89,7 +69,6 @@ def test_nested_list_enum_structured_output(profile: ProviderProfile, client: Vo
     ``response_schema``). Flat shapes often work even when the translator
     has subtle bugs; non-flat shapes are the real test.
     """
-    _xfail_openai_strict_schema(profile)
     response = client.complete(
         [
             Message(
