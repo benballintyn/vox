@@ -491,26 +491,17 @@ class AnthropicProvider(Provider):
         request.pop("stream", None)
         client = self._get_sync_client()
 
+        # Per-stream state for ``_process_stream_event``: buffers
+        # input_tokens (from message_start), stop_reason (from
+        # message_delta), and current_tool_use_id (for delta correlation
+        # — vox#20). The translator now emits ``usage`` on message_delta
+        # and a single ``done`` on message_stop, so the previous
+        # post-stream ``get_final_message().usage`` emission is gone —
+        # it would produce a duplicate ``usage`` chunk after ``done``.
+        state: dict[str, Any] = {}
         with client.messages.stream(**request) as stream:
             for event in stream:
-                chunk = self._process_stream_event(event)
-                if chunk:
-                    yield chunk
-
-            # Emit final usage
-            final_message = stream.get_final_message()
-            if final_message and final_message.usage:
-                yield StreamChunk(
-                    type="usage",
-                    usage=Usage(
-                        prompt_tokens=getattr(final_message.usage, "input_tokens", 0) or 0,
-                        completion_tokens=(getattr(final_message.usage, "output_tokens", 0) or 0),
-                        total_tokens=(
-                            (getattr(final_message.usage, "input_tokens", 0) or 0)
-                            + (getattr(final_message.usage, "output_tokens", 0) or 0)
-                        ),
-                    ),
-                )
+                yield from self._process_stream_event(event, state)
 
     async def _stream_async(self, request: dict[str, Any]) -> AsyncIterator[StreamChunk]:
         """Execute an asynchronous streaming request.
@@ -524,76 +515,125 @@ class AnthropicProvider(Provider):
         request.pop("stream", None)
         client = self._get_async_client()
 
+        state: dict[str, Any] = {}
         async with client.messages.stream(**request) as stream:
             async for event in stream:
-                chunk = self._process_stream_event(event)
-                if chunk:
+                for chunk in self._process_stream_event(event, state):
                     yield chunk
 
-            final_message = await stream.get_final_message()
-            if final_message and final_message.usage:
-                yield StreamChunk(
-                    type="usage",
-                    usage=Usage(
-                        prompt_tokens=getattr(final_message.usage, "input_tokens", 0) or 0,
-                        completion_tokens=(getattr(final_message.usage, "output_tokens", 0) or 0),
-                        total_tokens=(
-                            (getattr(final_message.usage, "input_tokens", 0) or 0)
-                            + (getattr(final_message.usage, "output_tokens", 0) or 0)
-                        ),
-                    ),
-                )
-
-    def _process_stream_event(self, event: Any) -> StreamChunk | None:
-        """Translate an Anthropic stream event to a StreamChunk.
+    def _process_stream_event(
+        self, event: Any, state: dict[str, Any] | None = None
+    ) -> list[StreamChunk]:
+        """Translate an Anthropic stream event to ``StreamChunk``s.
 
         Args:
             event: A raw SDK stream event.
+            state: Mutable per-stream state. Carries:
+
+                * ``input_tokens`` — buffered from ``message_start`` so
+                  the final ``usage`` chunk can report both halves.
+                * ``stop_reason`` — buffered from ``message_delta`` so
+                  the terminal ``done`` chunk carries the correct reason.
+                * ``current_tool_use_id`` — id of the most recent
+                  ``tool_use`` content block; attached to subsequent
+                  ``input_json_delta`` chunks so consumers can
+                  correlate streamed arguments with the right call
+                  (vox#20).
 
         Returns:
-            A StreamChunk, or None if the event should be skipped.
+            List of ``StreamChunk`` instances (often empty for events
+            that only update state).
         """
+        if state is None:
+            state = {}
         event_type = getattr(event, "type", None)
+
+        if event_type == "message_start":
+            # Anthropic carries ``input_tokens`` on the opening event
+            # only; ``output_tokens`` arrives on ``message_delta``.
+            msg = getattr(event, "message", None)
+            if msg is not None:
+                usage = getattr(msg, "usage", None)
+                if usage is not None:
+                    state["input_tokens"] = getattr(usage, "input_tokens", 0) or 0
+            return []
 
         if event_type == "content_block_start":
             block = event.content_block
             block_type = getattr(block, "type", None)
             if block_type == "tool_use":
-                return StreamChunk(
-                    type="tool_call_start",
-                    tool_call=ToolCallData(
-                        id=block.id,
-                        name=block.name,
-                        arguments={},
-                    ),
-                )
-            return None
+                # Buffer this call's id so input_json_delta chunks below
+                # can be tagged with the right tool_call_id (vox#20).
+                state["current_tool_use_id"] = block.id
+                return [
+                    StreamChunk(
+                        type="tool_call_start",
+                        tool_call=ToolCallData(
+                            id=block.id,
+                            name=block.name,
+                            arguments={},
+                        ),
+                    )
+                ]
+            return []
 
         if event_type == "content_block_delta":
             delta = event.delta
             delta_type = getattr(delta, "type", None)
 
             if delta_type == "text_delta":
-                return StreamChunk(type="text", text=delta.text)
+                return [StreamChunk(type="text", text=delta.text)]
             if delta_type == "thinking_delta":
-                return StreamChunk(type="thinking", thinking_text=delta.thinking)
+                return [StreamChunk(type="thinking", thinking_text=delta.thinking)]
             if delta_type == "input_json_delta":
-                return StreamChunk(
-                    type="tool_call_delta",
-                    arguments_delta=delta.partial_json,
-                )
-            return None
-
-        if event_type == "message_stop":
-            return StreamChunk(type="done")
+                return [
+                    StreamChunk(
+                        type="tool_call_delta",
+                        tool_call_id=state.get("current_tool_use_id", ""),
+                        arguments_delta=delta.partial_json,
+                    )
+                ]
+            return []
 
         if event_type == "message_delta":
+            # Anthropic delivers final state in two events: ``message_delta``
+            # carries ``stop_reason`` + ``output_tokens``; ``message_stop``
+            # is the terminator. Previously vox emitted ``done`` on both,
+            # producing two terminal chunks (vox#19). New shape: emit a
+            # single ``usage`` chunk here (combining buffered input_tokens
+            # with this event's output_tokens), buffer stop_reason, and
+            # emit the single ``done`` on message_stop below.
+            chunks: list[StreamChunk] = []
             delta = event.delta
             stop_reason = getattr(delta, "stop_reason", None)
             if stop_reason:
-                return StreamChunk(type="done", finish_reason=normalize_finish_reason(stop_reason))
+                state["stop_reason"] = stop_reason
+            usage_obj = getattr(event, "usage", None)
+            if usage_obj is not None:
+                input_tokens = state.get("input_tokens", 0)
+                output_tokens = getattr(usage_obj, "output_tokens", 0) or 0
+                chunks.append(
+                    StreamChunk(
+                        type="usage",
+                        usage=Usage(
+                            prompt_tokens=input_tokens,
+                            completion_tokens=output_tokens,
+                            total_tokens=input_tokens + output_tokens,
+                        ),
+                    )
+                )
+            return chunks
 
-        return None
+        if event_type == "message_stop":
+            stop_reason = state.get("stop_reason")
+            return [
+                StreamChunk(
+                    type="done",
+                    finish_reason=normalize_finish_reason(stop_reason) if stop_reason else None,
+                )
+            ]
+
+        return []
 
     # ── Public API ───────────────────────────────────────────────────────
 

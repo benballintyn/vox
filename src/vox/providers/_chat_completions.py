@@ -408,15 +408,26 @@ class ChatCompletionsProvider(Provider):
 
     # ── Streaming helpers ────────────────────────────────────────────────
 
-    def _translate_stream_chunk(self, chunk: Any) -> list[StreamChunk]:
-        """Translate a single Chat Completions stream chunk to a StreamChunk.
+    def _translate_stream_chunk(
+        self, chunk: Any, state: dict[str, Any] | None = None
+    ) -> list[StreamChunk]:
+        """Translate a single Chat Completions stream chunk to ``StreamChunk``s.
 
         Args:
             chunk: A raw SDK stream chunk.
+            state: Mutable per-stream state. Carries
+                ``current_tool_call_id`` — the id from the first delta of
+                a tool call, replayed on subsequent argument-delta chunks
+                that don't repeat it (vox#20). The Chat Completions SDK
+                sets ``tc.id`` only on the *first* delta for a given
+                tool call; later deltas have ``tc.id is None``, so
+                consumers can't correlate without buffered state.
 
         Returns:
-            A StreamChunk, or None if the chunk should be skipped.
+            List of StreamChunk instances (may be empty).
         """
+        if state is None:
+            state = {}
         chunks: list[StreamChunk] = []
 
         # Usage chunk (final, sent after finish_reason on a chunk with no choices)
@@ -444,12 +455,17 @@ class ChatCompletionsProvider(Provider):
         # both events, not return early after the name.
         if delta.tool_calls:
             tc = delta.tool_calls[0]
+            # Buffer the id on first sight; reuse it for subsequent
+            # name-less / id-less argument deltas (vox#20).
+            if tc.id:
+                state["current_tool_call_id"] = tc.id
+            tool_call_id = state.get("current_tool_call_id", "")
             if tc.function and tc.function.name:
                 chunks.append(
                     StreamChunk(
                         type="tool_call_start",
                         tool_call=ToolCallData(
-                            id=tc.id or "",
+                            id=tool_call_id,
                             name=tc.function.name,
                             arguments={},
                         ),
@@ -459,7 +475,7 @@ class ChatCompletionsProvider(Provider):
                 chunks.append(
                     StreamChunk(
                         type="tool_call_delta",
-                        tool_call_id=tc.id or "",
+                        tool_call_id=tool_call_id,
                         arguments_delta=tc.function.arguments,
                     )
                 )
@@ -643,10 +659,15 @@ class ChatCompletionsProvider(Provider):
             stream=True,
             **kwargs,
         )
+        # Per-stream state for the chunk translator: buffers the
+        # tool_call id so subsequent argument-delta chunks (which the
+        # Chat Completions SDK leaves with ``tc.id is None``) inherit
+        # the id from the first delta of the same call (vox#20).
+        state: dict[str, Any] = {}
         try:
             response_stream = self._get_sync_client().chat.completions.create(**request)
             for chunk in response_stream:
-                yield from self._translate_stream_chunk(chunk)
+                yield from self._translate_stream_chunk(chunk, state)
         except Exception as e:
             if isinstance(
                 e,
@@ -703,10 +724,11 @@ class ChatCompletionsProvider(Provider):
             stream=True,
             **kwargs,
         )
+        state: dict[str, Any] = {}
         try:
             response_stream = await self._get_async_client().chat.completions.create(**request)
             async for chunk in response_stream:
-                for translated in self._translate_stream_chunk(chunk):
+                for translated in self._translate_stream_chunk(chunk, state):
                     yield translated
         except Exception as e:
             if isinstance(

@@ -112,6 +112,45 @@ class TestChatCompletionsStreaming:
         assert chunks[0].type == "tool_call_delta"
         assert chunks[0].arguments_delta == '{"q":'
 
+    def test_tool_call_args_delta_inherits_buffered_id(
+        self, chat_completions_provider: ChatCompletionsProvider
+    ) -> None:
+        """vox#20 — later args deltas (``tc.id=None``) inherit the buffered id.
+
+        The Chat Completions SDK only sets ``tc.id`` on the *first*
+        delta for a tool call; subsequent deltas have ``tc.id is None``.
+        State carried across calls supplies the id.
+        """
+        state: dict = {}
+        # First chunk seeds the buffered id.
+        first = _cc_chunk(
+            tool_call_name="search",
+            tool_call_args='{"q":',
+            tool_call_id="call_xyz",
+        )
+        chat_completions_provider._translate_stream_chunk(first, state)
+        assert state["current_tool_call_id"] == "call_xyz"
+
+        # Subsequent delta has tc.id=None on the real SDK; simulate that.
+        next_chunk = MagicMock()
+        next_chunk.usage = None
+        choice = MagicMock()
+        choice.finish_reason = None
+        delta = MagicMock()
+        delta.content = None
+        tc = MagicMock()
+        tc.id = None  # the bug-triggering case
+        tc.function.name = None
+        tc.function.arguments = '"test"}'
+        delta.tool_calls = [tc]
+        choice.delta = delta
+        next_chunk.choices = [choice]
+
+        chunks = chat_completions_provider._translate_stream_chunk(next_chunk, state)
+        delta_chunk = next(c for c in chunks if c.type == "tool_call_delta")
+        assert delta_chunk.tool_call_id == "call_xyz"
+        assert delta_chunk.arguments_delta == '"test"}'
+
     def test_tool_call_name_and_args_in_same_chunk(
         self, chat_completions_provider: ChatCompletionsProvider
     ) -> None:
@@ -183,77 +222,132 @@ def _anthropic_event(event_type: str, **kwargs) -> MagicMock:
 
 
 class TestAnthropicStreaming:
-    """Tests for the Anthropic stream event translator."""
+    """Tests for the Anthropic stream event translator.
+
+    The translator is stateful across events (vox#19 + vox#20), so each
+    test threads an explicit ``state`` dict and the result is a list.
+    """
 
     def test_text_delta(self, anthropic_provider: AnthropicProvider) -> None:
         delta = MagicMock()
         delta.type = "text_delta"
         delta.text = "Hello"
-        chunk = anthropic_provider._process_stream_event(
-            _anthropic_event("content_block_delta", delta=delta)
+        chunks = anthropic_provider._process_stream_event(
+            _anthropic_event("content_block_delta", delta=delta), {}
         )
-        assert chunk is not None
-        assert chunk.type == "text"
-        assert chunk.text == "Hello"
+        assert len(chunks) == 1
+        assert chunks[0].type == "text"
+        assert chunks[0].text == "Hello"
 
     def test_thinking_delta(self, anthropic_provider: AnthropicProvider) -> None:
         delta = MagicMock()
         delta.type = "thinking_delta"
         delta.thinking = "Let me reason..."
-        chunk = anthropic_provider._process_stream_event(
-            _anthropic_event("content_block_delta", delta=delta)
+        chunks = anthropic_provider._process_stream_event(
+            _anthropic_event("content_block_delta", delta=delta), {}
         )
-        assert chunk is not None
-        assert chunk.type == "thinking"
-        assert chunk.thinking_text == "Let me reason..."
+        assert len(chunks) == 1
+        assert chunks[0].type == "thinking"
+        assert chunks[0].thinking_text == "Let me reason..."
 
     def test_tool_use_block_start(self, anthropic_provider: AnthropicProvider) -> None:
         block = MagicMock()
         block.type = "tool_use"
         block.id = "tc_1"
         block.name = "search"
-        chunk = anthropic_provider._process_stream_event(
-            _anthropic_event("content_block_start", content_block=block)
+        state: dict = {}
+        chunks = anthropic_provider._process_stream_event(
+            _anthropic_event("content_block_start", content_block=block), state
         )
-        assert chunk is not None
-        assert chunk.type == "tool_call_start"
-        assert chunk.tool_call is not None
-        assert chunk.tool_call.name == "search"
+        assert len(chunks) == 1
+        assert chunks[0].type == "tool_call_start"
+        assert chunks[0].tool_call is not None
+        assert chunks[0].tool_call.name == "search"
+        # Side effect: buffers the current tool_use id for delta correlation.
+        assert state["current_tool_use_id"] == "tc_1"
 
-    def test_input_json_delta(self, anthropic_provider: AnthropicProvider) -> None:
+    def test_input_json_delta_correlates_with_current_tool_use(
+        self, anthropic_provider: AnthropicProvider
+    ) -> None:
+        """vox#20 — ``input_json_delta`` chunks get the buffered tool_use id.
+
+        Anthropic's argument-delta events don't carry the tool_use id
+        themselves, so consumers can't correlate without the buffered
+        state from the preceding ``content_block_start``.
+        """
+        # First, simulate the tool_use block start to seed state.
+        state: dict = {}
+        block = MagicMock()
+        block.type = "tool_use"
+        block.id = "tc_xyz"
+        block.name = "search"
+        anthropic_provider._process_stream_event(
+            _anthropic_event("content_block_start", content_block=block), state
+        )
+
         delta = MagicMock()
         delta.type = "input_json_delta"
         delta.partial_json = '{"q":'
-        chunk = anthropic_provider._process_stream_event(
-            _anthropic_event("content_block_delta", delta=delta)
+        chunks = anthropic_provider._process_stream_event(
+            _anthropic_event("content_block_delta", delta=delta), state
         )
-        assert chunk is not None
-        assert chunk.type == "tool_call_delta"
-        assert chunk.arguments_delta == '{"q":'
+        assert len(chunks) == 1
+        assert chunks[0].type == "tool_call_delta"
+        assert chunks[0].tool_call_id == "tc_xyz"
+        assert chunks[0].arguments_delta == '{"q":'
 
-    def test_message_delta_with_stop_reason_normalized(
+    def test_message_delta_emits_usage_and_buffers_stop_reason(
         self, anthropic_provider: AnthropicProvider
     ) -> None:
-        """Anthropic's native 'end_turn' should normalize to 'stop'."""
+        """vox#19 — ``message_delta`` emits usage; ``message_stop`` emits done.
+
+        Previously vox emitted ``done`` here AND on ``message_stop`` (a
+        duplicate), plus a post-stream ``usage`` chunk (after ``done``).
+        New shape: ``message_delta`` → ``usage`` chunk; stop_reason
+        buffered for the upcoming ``message_stop``.
+        """
+        # Seed input_tokens from a preceding message_start.
+        state: dict = {}
+        msg = MagicMock()
+        msg.usage.input_tokens = 100
+        anthropic_provider._process_stream_event(
+            _anthropic_event("message_start", message=msg), state
+        )
+
         delta = MagicMock()
         delta.stop_reason = "end_turn"
-        chunk = anthropic_provider._process_stream_event(
-            _anthropic_event("message_delta", delta=delta)
+        usage = MagicMock()
+        usage.output_tokens = 25
+        chunks = anthropic_provider._process_stream_event(
+            _anthropic_event("message_delta", delta=delta, usage=usage), state
         )
-        assert chunk is not None
-        assert chunk.type == "done"
-        assert chunk.finish_reason == "stop"
+        assert len(chunks) == 1
+        assert chunks[0].type == "usage"
+        assert chunks[0].usage is not None
+        assert chunks[0].usage.prompt_tokens == 100
+        assert chunks[0].usage.completion_tokens == 25
+        assert chunks[0].usage.total_tokens == 125
+        # stop_reason buffered for message_stop.
+        assert state["stop_reason"] == "end_turn"
 
-    def test_message_delta_tool_use_normalized(
+    def test_message_stop_emits_single_done_with_buffered_reason(
         self, anthropic_provider: AnthropicProvider
     ) -> None:
-        delta = MagicMock()
-        delta.stop_reason = "tool_use"
-        chunk = anthropic_provider._process_stream_event(
-            _anthropic_event("message_delta", delta=delta)
-        )
-        assert chunk is not None
-        assert chunk.finish_reason == "tool_calls"
+        """vox#19 — ``message_stop`` is the sole emitter of ``done``."""
+        state: dict = {"stop_reason": "tool_use"}
+        chunks = anthropic_provider._process_stream_event(_anthropic_event("message_stop"), state)
+        assert len(chunks) == 1
+        assert chunks[0].type == "done"
+        assert chunks[0].finish_reason == "tool_calls"
+
+    def test_message_stop_without_buffered_reason(
+        self, anthropic_provider: AnthropicProvider
+    ) -> None:
+        """``message_stop`` arriving without a buffered reason still emits done."""
+        chunks = anthropic_provider._process_stream_event(_anthropic_event("message_stop"), {})
+        assert len(chunks) == 1
+        assert chunks[0].type == "done"
+        assert chunks[0].finish_reason is None
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -267,53 +361,80 @@ def openai_provider() -> OpenAIProvider:
 
 
 class TestOpenAIStreaming:
-    """Tests for the OpenAI Responses API stream event translator."""
+    """Tests for the OpenAI Responses API stream event translator.
+
+    The translator is stateful across events (vox#18 + vox#20), so each
+    test threads an explicit ``state`` dict and the result is a list.
+    """
 
     def test_output_text_delta(self, openai_provider: OpenAIProvider) -> None:
         event = MagicMock()
         event.type = "response.output_text.delta"
         event.delta = "Hello"
-        chunk = openai_provider._process_stream_event(event)
-        assert chunk is not None
-        assert chunk.type == "text"
-        assert chunk.text == "Hello"
+        chunks = openai_provider._process_stream_event(event, {})
+        assert len(chunks) == 1
+        assert chunks[0].type == "text"
+        assert chunks[0].text == "Hello"
 
-    def test_function_call_added(self, openai_provider: OpenAIProvider) -> None:
+    def test_function_call_added_buffers_id_map(self, openai_provider: OpenAIProvider) -> None:
+        """Start chunk emits with call_id; state buffers item_id → call_id."""
         item = MagicMock()
         item.type = "function_call"
-        item.call_id = "call_1"
+        item.id = "fc_abc"
+        item.call_id = "call_abc"
         item.name = "search"
         event = MagicMock()
         event.type = "response.output_item.added"
         event.item = item
-        chunk = openai_provider._process_stream_event(event)
-        assert chunk is not None
-        assert chunk.type == "tool_call_start"
-        assert chunk.tool_call is not None
-        assert chunk.tool_call.name == "search"
+        state: dict = {}
+        chunks = openai_provider._process_stream_event(event, state)
+        assert len(chunks) == 1
+        assert chunks[0].type == "tool_call_start"
+        assert chunks[0].tool_call is not None
+        assert chunks[0].tool_call.id == "call_abc"
+        assert state["item_id_to_call_id"] == {"fc_abc": "call_abc"}
 
-    def test_function_arguments_delta(self, openai_provider: OpenAIProvider) -> None:
-        event = MagicMock()
+    def test_function_arguments_delta_resolves_via_state(
+        self, openai_provider: OpenAIProvider
+    ) -> None:
+        """vox#20 — argument deltas carry ``item_id`` (fc_*); resolve to call_*.
+
+        Real SDK ``response.function_call_arguments.delta`` events have
+        only ``item_id`` — not ``call_id``. vox previously read
+        ``event.call_id`` and got "" on every delta, breaking the
+        consumer-side correlation. The buffered ``item_id_to_call_id``
+        map produced by the preceding ``output_item.added`` resolves it.
+        """
+        state: dict = {"item_id_to_call_id": {"fc_abc": "call_abc"}}
+        event = MagicMock(spec=["type", "item_id", "delta"])
         event.type = "response.function_call_arguments.delta"
-        event.call_id = "call_1"
+        event.item_id = "fc_abc"
         event.delta = '{"q":'
-        chunk = openai_provider._process_stream_event(event)
-        assert chunk is not None
-        assert chunk.type == "tool_call_delta"
-        assert chunk.arguments_delta == '{"q":'
+        chunks = openai_provider._process_stream_event(event, state)
+        assert len(chunks) == 1
+        assert chunks[0].type == "tool_call_delta"
+        assert chunks[0].tool_call_id == "call_abc"
+        assert chunks[0].arguments_delta == '{"q":'
 
     def test_reasoning_summary_delta(self, openai_provider: OpenAIProvider) -> None:
         event = MagicMock()
         event.type = "response.reasoning_summary_text.delta"
         event.delta = "Considering..."
-        chunk = openai_provider._process_stream_event(event)
-        assert chunk is not None
-        assert chunk.type == "thinking"
-        assert chunk.thinking_text == "Considering..."
+        chunks = openai_provider._process_stream_event(event, {})
+        assert len(chunks) == 1
+        assert chunks[0].type == "thinking"
+        assert chunks[0].thinking_text == "Considering..."
 
-    def test_response_completed_with_tool_calls(self, openai_provider: OpenAIProvider) -> None:
-        """A completed response with function_call output items normalizes
-        to 'tool_calls' rather than 'stop'."""
+    def test_response_completed_emits_usage_then_done(
+        self, openai_provider: OpenAIProvider
+    ) -> None:
+        """vox#18 — ``response.completed`` emits a separate ``usage`` chunk.
+
+        Previously ``usage`` rode on the ``done`` chunk's ``usage``
+        field — consumers iterating chunk types never saw a
+        ``type="usage"`` chunk. Now the translator emits two chunks
+        in order: usage first, then done.
+        """
         fc_item = MagicMock()
         fc_item.type = "function_call"
 
@@ -329,10 +450,12 @@ class TestOpenAIStreaming:
         event.type = "response.completed"
         event.response = resp
 
-        chunk = openai_provider._process_stream_event(event)
-        assert chunk is not None
-        assert chunk.type == "done"
-        assert chunk.finish_reason == "tool_calls"
+        chunks = openai_provider._process_stream_event(event, {})
+        assert [c.type for c in chunks] == ["usage", "done"]
+        assert chunks[0].usage is not None
+        assert chunks[0].usage.prompt_tokens == 10
+        assert chunks[0].usage.completion_tokens == 5
+        assert chunks[1].finish_reason == "tool_calls"
 
     def test_response_completed_max_tokens_normalized(
         self, openai_provider: OpenAIProvider
@@ -351,7 +474,6 @@ class TestOpenAIStreaming:
         event.type = "response.completed"
         event.response = resp
 
-        chunk = openai_provider._process_stream_event(event)
-        assert chunk is not None
-        assert chunk.type == "done"
-        assert chunk.finish_reason == "length"
+        chunks = openai_provider._process_stream_event(event, {})
+        done = next(c for c in chunks if c.type == "done")
+        assert done.finish_reason == "length"
