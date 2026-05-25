@@ -56,7 +56,13 @@ def test_vision_identifies_red_square(
             Message(
                 role="user",
                 content=[
-                    TextContent(text="What color is this image? Reply with a single word."),
+                    TextContent(
+                        text=(
+                            "I am showing you a solid-color square image. "
+                            "Identify the single color filling the entire "
+                            "image. Reply with just the color name, one word."
+                        )
+                    ),
                     ImageContent(data=red_square_b64, media_type="image/png"),
                 ],
             )
@@ -79,7 +85,13 @@ async def test_vision_async_parity(
             Message(
                 role="user",
                 content=[
-                    TextContent(text="What color is this image? Reply with a single word."),
+                    TextContent(
+                        text=(
+                            "I am showing you a solid-color square image. "
+                            "Identify the single color filling the entire "
+                            "image. Reply with just the color name, one word."
+                        )
+                    ),
                     ImageContent(data=red_square_b64, media_type="image/png"),
                 ],
             )
