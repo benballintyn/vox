@@ -151,6 +151,37 @@ class TestOpenAIStrictSchemaEnforcement:
         result = _enforce_openai_strict_schema(schema)
         assert result == schema
 
+    def test_strips_siblings_from_ref_nodes(self) -> None:
+        """OpenAI rejects ``description`` (and other keys) on a ``$ref`` node.
+
+        Pydantic emits ``{"$ref": ..., "description": ...}`` for
+        referenced sub-models; collapse to just ``{"$ref": ...}``.
+        """
+        schema = {
+            "$ref": "#/$defs/Inner",
+            "description": "this should be stripped",
+            "title": "ditto",
+        }
+        result = _enforce_openai_strict_schema(schema)
+        assert result == {"$ref": "#/$defs/Inner"}
+
+    def test_strips_ref_siblings_when_nested(self) -> None:
+        """``$ref`` sibling-stripping recurses through containers."""
+        schema = {
+            "$defs": {
+                "Inner": {
+                    "type": "object",
+                    "properties": {"k": {"type": "string"}},
+                }
+            },
+            "type": "object",
+            "properties": {
+                "x": {"$ref": "#/$defs/Inner", "description": "an Inner"},
+            },
+        }
+        result = _enforce_openai_strict_schema(schema)
+        assert result["properties"]["x"] == {"$ref": "#/$defs/Inner"}
+
     def test_does_not_mutate_input(self) -> None:
         """Transformation must be non-destructive."""
         schema = {

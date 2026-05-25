@@ -33,10 +33,16 @@ def _enforce_openai_strict_schema(schema: Any) -> Any:
     ``allOf`` — and applies both invariants in-place. Non-object nodes
     pass through untouched.
 
-    Other strict-mode constraints (limited keywords, no ``default``, no
-    ``format`` on certain types) are the caller's responsibility — vox
-    fixes only the requirements that ``model_json_schema()`` doesn't
-    satisfy out of the box.
+    It also collapses any node containing ``$ref`` down to just
+    ``{"$ref": <pointer>}``. OpenAI strict mode forbids sibling
+    keywords on a ``$ref`` (per the historical JSON Schema spec, ``$ref``
+    replaced the rest of the node), but Pydantic emits
+    ``{"$ref": ..., "description": ...}`` for referenced sub-models.
+
+    Other strict-mode constraints (limited keywords elsewhere, no
+    ``default``, ``format`` restrictions, etc.) are the caller's
+    responsibility — vox fixes only the requirements that
+    ``model_json_schema()`` doesn't satisfy out of the box.
 
     Args:
         schema: A JSON Schema dict (or sub-schema).
@@ -47,6 +53,14 @@ def _enforce_openai_strict_schema(schema: Any) -> Any:
     """
     if not isinstance(schema, dict):
         return schema
+
+    # ``$ref`` nodes are not allowed to carry sibling keywords in OpenAI
+    # strict mode — per the JSON Schema spec, ``$ref`` historically
+    # replaced all other keywords on its node. Pydantic emits
+    # ``{"$ref": ..., "description": ...}`` for referenced sub-models,
+    # which the API rejects. Strip everything else.
+    if "$ref" in schema:
+        return {"$ref": schema["$ref"]}
 
     result = dict(schema)
 
