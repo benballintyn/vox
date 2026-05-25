@@ -1,11 +1,13 @@
 """Tests for structured output helpers."""
 
 import json
+from enum import StrEnum
 
 import pytest
 from pydantic import BaseModel
 
 from vox._structured import (
+    _enforce_openai_strict_schema,
     pydantic_to_anthropic_tool,
     pydantic_to_gemini_schema,
     pydantic_to_openai_response_format,
@@ -31,6 +33,135 @@ class SimpleResult(BaseModel):
     confidence: float
 
 
+class _Continent(StrEnum):
+    EUROPE = "europe"
+    ASIA = "asia"
+
+
+class _City(BaseModel):
+    name: str
+    population: int
+
+
+class _CountryReport(BaseModel):
+    """Nested + list + enum + $defs schema target for strict-mode tests."""
+
+    country: str
+    continent: _Continent
+    cities: list[_City]
+
+
+class TestOpenAIStrictSchemaEnforcement:
+    """Tests for ``_enforce_openai_strict_schema`` — vox#21.
+
+    The two invariants tested everywhere:
+
+    * Every object node has ``additionalProperties: false``.
+    * Every object node's ``required`` lists every key in ``properties``.
+
+    Non-object nodes (strings, enums, arrays-of-strings) pass through
+    untouched. Recursion covers ``properties``, ``items``, ``$defs`` /
+    ``definitions``, and ``anyOf`` / ``oneOf`` / ``allOf``.
+    """
+
+    def test_flat_object(self) -> None:
+        schema = {
+            "type": "object",
+            "properties": {"a": {"type": "string"}, "b": {"type": "integer"}},
+        }
+        result = _enforce_openai_strict_schema(schema)
+        assert result["additionalProperties"] is False
+        assert sorted(result["required"]) == ["a", "b"]
+
+    def test_overrides_existing_required(self) -> None:
+        """Pydantic puts only non-default fields in ``required``; strict needs all."""
+        schema = {
+            "type": "object",
+            "properties": {"a": {"type": "string"}, "b": {"type": "integer"}},
+            "required": ["a"],
+        }
+        result = _enforce_openai_strict_schema(schema)
+        assert sorted(result["required"]) == ["a", "b"]
+
+    def test_recurses_into_nested_object(self) -> None:
+        schema = {
+            "type": "object",
+            "properties": {
+                "inner": {
+                    "type": "object",
+                    "properties": {"x": {"type": "string"}},
+                }
+            },
+        }
+        result = _enforce_openai_strict_schema(schema)
+        inner = result["properties"]["inner"]
+        assert inner["additionalProperties"] is False
+        assert inner["required"] == ["x"]
+
+    def test_recurses_into_array_items(self) -> None:
+        schema = {
+            "type": "object",
+            "properties": {
+                "rows": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {"id": {"type": "integer"}},
+                    },
+                }
+            },
+        }
+        result = _enforce_openai_strict_schema(schema)
+        item = result["properties"]["rows"]["items"]
+        assert item["additionalProperties"] is False
+        assert item["required"] == ["id"]
+
+    def test_recurses_into_defs(self) -> None:
+        schema = {
+            "$defs": {
+                "Inner": {
+                    "type": "object",
+                    "properties": {"k": {"type": "string"}},
+                }
+            },
+            "type": "object",
+            "properties": {"x": {"$ref": "#/$defs/Inner"}},
+        }
+        result = _enforce_openai_strict_schema(schema)
+        inner = result["$defs"]["Inner"]
+        assert inner["additionalProperties"] is False
+        assert inner["required"] == ["k"]
+
+    def test_recurses_into_anyof(self) -> None:
+        schema = {
+            "anyOf": [
+                {"type": "object", "properties": {"a": {"type": "string"}}},
+                {"type": "string"},
+            ]
+        }
+        result = _enforce_openai_strict_schema(schema)
+        obj_branch = result["anyOf"][0]
+        assert obj_branch["additionalProperties"] is False
+        assert obj_branch["required"] == ["a"]
+        # Non-object branch untouched.
+        assert result["anyOf"][1] == {"type": "string"}
+
+    def test_non_object_passes_through(self) -> None:
+        schema = {"type": "string", "enum": ["a", "b"]}
+        result = _enforce_openai_strict_schema(schema)
+        assert result == schema
+
+    def test_does_not_mutate_input(self) -> None:
+        """Transformation must be non-destructive."""
+        schema = {
+            "type": "object",
+            "properties": {"a": {"type": "string"}},
+        }
+        original = json.loads(json.dumps(schema))
+        _enforce_openai_strict_schema(schema)
+        assert schema == original
+
+
 class TestOpenAIResponseFormat:
     """Tests for Chat Completions response_format generation."""
 
@@ -49,6 +180,22 @@ class TestOpenAIResponseFormat:
         props = result["json_schema"]["schema"]["properties"]
         assert props["confidence"]["type"] == "number"
 
+    def test_strict_invariants_applied_at_top_level(self) -> None:
+        """vox#21 — Chat Completions strict mode requires ``additionalProperties: false``."""
+        result = pydantic_to_openai_response_format(WeatherReport)
+        schema = result["json_schema"]["schema"]
+        assert schema["additionalProperties"] is False
+        assert sorted(schema["required"]) == sorted(WeatherReport.model_fields.keys())
+
+    def test_strict_invariants_applied_to_nested_defs(self) -> None:
+        """Nested models surface as ``$defs``; strict mode applies there too."""
+        result = pydantic_to_openai_response_format(_CountryReport)
+        schema = result["json_schema"]["schema"]
+        assert schema["additionalProperties"] is False
+        inner_city = schema["$defs"]["_City"]
+        assert inner_city["additionalProperties"] is False
+        assert sorted(inner_city["required"]) == ["name", "population"]
+
 
 class TestOpenAIResponsesTextFormat:
     """Tests for Responses API text.format generation."""
@@ -60,6 +207,20 @@ class TestOpenAIResponsesTextFormat:
         assert fmt["type"] == "json_schema"
         assert fmt["name"] == "WeatherReport"
         assert fmt["strict"] is True
+
+    def test_strict_invariants_applied_at_top_level(self) -> None:
+        """vox#21 — Responses API enforces the same strict-mode requirements."""
+        result = pydantic_to_openai_responses_text_format(WeatherReport)
+        schema = result["format"]["schema"]
+        assert schema["additionalProperties"] is False
+        assert sorted(schema["required"]) == sorted(WeatherReport.model_fields.keys())
+
+    def test_strict_invariants_applied_to_nested_defs(self) -> None:
+        result = pydantic_to_openai_responses_text_format(_CountryReport)
+        schema = result["format"]["schema"]
+        inner_city = schema["$defs"]["_City"]
+        assert inner_city["additionalProperties"] is False
+        assert sorted(inner_city["required"]) == ["name", "population"]
 
 
 class TestAnthropicTool:
