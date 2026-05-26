@@ -7,12 +7,13 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from ._pricing import ModelPricing, estimate_cost
 from ._registry import resolve_provider
 from .errors import InvalidRequestError
 from .models.config import ProviderConfig
 from .models.messages import Message
 from .models.reasoning import ReasoningConfig
-from .models.responses import CompletionResponse, StreamChunk
+from .models.responses import CompletionResponse, StreamChunk, Usage
 from .models.tools import ToolSpec
 from .providers.base import Provider
 
@@ -32,6 +33,11 @@ class VoxClient:
         openrouter_app_name: App name for OpenRouter's X-Title header.
         openrouter_app_url: App URL for OpenRouter's HTTP-Referer header.
         provider_configs: Per-provider ProviderConfig overrides keyed by provider name.
+        custom_pricing: Per-model pricing overrides keyed by model id.
+            Entries here take precedence over vox's built-in price
+            snapshot when computing ``usage.estimated_cost``. Pass a
+            ``ModelPricing(...)`` for any model you want priced
+            differently (or for models vox doesn't know about at all).
     """
 
     def __init__(
@@ -45,6 +51,7 @@ class VoxClient:
         openrouter_app_name: str | None = None,
         openrouter_app_url: str | None = None,
         provider_configs: dict[str, ProviderConfig] | None = None,
+        custom_pricing: dict[str, ModelPricing] | None = None,
     ) -> None:
         self._provider_configs = provider_configs or {}
         self._api_keys = {
@@ -57,6 +64,22 @@ class VoxClient:
         self._openrouter_app_name = openrouter_app_name
         self._openrouter_app_url = openrouter_app_url
         self._providers: dict[str, Provider] = {}
+        self._custom_pricing: dict[str, ModelPricing] = custom_pricing or {}
+
+    def _populate_cost(self, usage: Usage | None, model: str) -> None:
+        """Annotate a ``Usage`` in place with ``model`` + ``estimated_cost``.
+
+        Used after the provider returns to add the pricing-derived
+        fields without changing the provider's contract — providers
+        stay ignorant of pricing; ``VoxClient`` is the integration
+        point. ``None``-tolerant for the rare case a provider returns
+        no usage (Usage is currently a required field on
+        CompletionResponse, so this is defensive).
+        """
+        if usage is None:
+            return
+        usage.model = model
+        usage.estimated_cost = estimate_cost(usage, model, self._custom_pricing)
 
     def _get_provider(self, name: str) -> Provider:
         """Get or create a provider by name.
@@ -168,7 +191,7 @@ class VoxClient:
         """
         resolved = resolve_provider(model, provider)
         adapter = self._get_provider(resolved)
-        return adapter.complete(
+        response = adapter.complete(
             messages,
             model=model,
             max_tokens=max_tokens,
@@ -179,6 +202,8 @@ class VoxClient:
             stop=stop,
             **kwargs,
         )
+        self._populate_cost(response.usage, model)
+        return response
 
     async def acomplete(
         self,
@@ -213,7 +238,7 @@ class VoxClient:
         """
         resolved = resolve_provider(model, provider)
         adapter = self._get_provider(resolved)
-        return await adapter.acomplete(
+        response = await adapter.acomplete(
             messages,
             model=model,
             max_tokens=max_tokens,
@@ -224,6 +249,8 @@ class VoxClient:
             stop=stop,
             **kwargs,
         )
+        self._populate_cost(response.usage, model)
+        return response
 
     def stream(
         self,
@@ -256,7 +283,7 @@ class VoxClient:
         """
         resolved = resolve_provider(model, provider)
         adapter = self._get_provider(resolved)
-        yield from adapter.stream(
+        for chunk in adapter.stream(
             messages,
             model=model,
             max_tokens=max_tokens,
@@ -265,7 +292,12 @@ class VoxClient:
             reasoning=reasoning,
             stop=stop,
             **kwargs,
-        )
+        ):
+            # Annotate the usage chunk with model + estimated_cost so
+            # streaming consumers get the same telemetry as non-streamers.
+            if chunk.type == "usage":
+                self._populate_cost(chunk.usage, model)
+            yield chunk
 
     async def astream(
         self,
@@ -308,4 +340,6 @@ class VoxClient:
             stop=stop,
             **kwargs,
         ):
+            if chunk.type == "usage":
+                self._populate_cost(chunk.usage, model)
             yield chunk

@@ -1,5 +1,12 @@
 """Vox — Model-agnostic LLM execution library."""
 
+from ._pricing import (
+    MODEL_PRICING,
+    PRICING_SNAPSHOT_DATE,
+    ModelPricing,
+    estimate_cost,
+    resolve_pricing,
+)
 from .client import VoxClient
 from .errors import (
     AuthenticationError,
@@ -30,6 +37,8 @@ from .models.responses import (
 from .models.tools import Tool, ToolCall, ToolResult, ToolSpec
 
 __all__ = [
+    "MODEL_PRICING",
+    "PRICING_SNAPSHOT_DATE",
     "AnthropicReasoning",
     "AuthenticationError",
     "CompletionResponse",
@@ -41,6 +50,7 @@ __all__ = [
     "InvalidRequestError",
     "Message",
     "ModelNotFoundError",
+    "ModelPricing",
     "OpenAIReasoning",
     "ProviderConfig",
     "ProviderError",
@@ -58,5 +68,7 @@ __all__ = [
     "Usage",
     "VoxClient",
     "VoxError",
+    "estimate_cost",
     "normalize_finish_reason",
+    "resolve_pricing",
 ]

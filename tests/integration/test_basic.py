@@ -37,6 +37,13 @@ def test_complete_returns_normalized_response(profile: ProviderProfile, client: 
     # Some providers (e.g. OpenAI Responses API) report it; others compute
     # via prompt+completion. Either way it must be ≥ prompt_tokens.
     assert response.usage.total_tokens >= response.usage.prompt_tokens
+    # vox#0.3.0 — VoxClient annotates Usage with the model that produced
+    # it and an estimated_cost computed from the built-in price table.
+    # Every model in the integration profile set is in the table, so
+    # estimated_cost must be a finite, non-negative float.
+    assert response.usage.model == profile.model
+    assert response.usage.estimated_cost is not None
+    assert response.usage.estimated_cost >= 0.0
 
 
 async def test_acomplete_parity(profile: ProviderProfile, client: VoxClient) -> None:
