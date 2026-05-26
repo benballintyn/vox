@@ -500,20 +500,50 @@ class ChatCompletionsProvider(Provider):
                 )
             )
 
-        # Finish reason — dedupped. Some proxied providers (OpenRouter
-        # especially) send ``finish_reason`` on more than one chunk
-        # near end-of-stream; vox emits exactly one terminal ``done``.
+        # Finish reason — buffered rather than emitted immediately.
+        # OpenRouter (and direct OpenAI with the deprecated
+        # ``stream_options.include_usage`` flag) delivers ``usage`` on
+        # a *trailing* chunk that arrives AFTER the finish_reason chunk.
+        # If we emitted ``done`` here, ``usage`` would land *after*
+        # ``done`` in the output stream, breaking the cross-provider
+        # contract (text → usage → done). Buffer instead; the public
+        # ``stream`` / ``astream`` wrappers call ``_finalize_stream``
+        # at end-of-stream to flush a single ``done``.
+        #
+        # Dedup is automatic: only the *first* finish_reason landing
+        # in this buffer wins; subsequent ones (some proxied providers
+        # repeat finish_reason across chunks) are silently dropped.
         if chunk.choices:
             choice = chunk.choices[0]
-            if choice.finish_reason and not state.get("done_emitted"):
-                state["done_emitted"] = True
-                chunks.append(
-                    StreamChunk(
-                        type="done",
-                        finish_reason=normalize_finish_reason(choice.finish_reason),
-                    )
-                )
+            if choice.finish_reason and "buffered_finish_reason" not in state:
+                state["buffered_finish_reason"] = choice.finish_reason
 
+        return chunks
+
+    def _finalize_stream(self, state: dict[str, Any]) -> list[StreamChunk]:
+        """Flush any deferred chunks at end-of-stream.
+
+        Called by ``stream`` / ``astream`` after the SDK's chunk
+        iterator is exhausted. Currently emits the single ``done``
+        chunk buffered by ``_translate_stream_chunk`` so usage (which
+        may arrive on a trailing chunk) is always emitted first.
+
+        Args:
+            state: The per-stream state dict.
+
+        Returns:
+            Chunks to yield after the per-chunk loop.
+        """
+        chunks: list[StreamChunk] = []
+        finish_reason = state.get("buffered_finish_reason")
+        if finish_reason and not state.get("done_emitted"):
+            state["done_emitted"] = True
+            chunks.append(
+                StreamChunk(
+                    type="done",
+                    finish_reason=normalize_finish_reason(finish_reason),
+                )
+            )
         return chunks
 
     # ── Public API ───────────────────────────────────────────────────────
@@ -689,6 +719,8 @@ class ChatCompletionsProvider(Provider):
             response_stream = self._get_sync_client().chat.completions.create(**request)
             for chunk in response_stream:
                 yield from self._translate_stream_chunk(chunk, state)
+            # Flush deferred ``done`` (and any future buffered chunks).
+            yield from self._finalize_stream(state)
         except Exception as e:
             if isinstance(
                 e,
@@ -751,6 +783,8 @@ class ChatCompletionsProvider(Provider):
             async for chunk in response_stream:
                 for translated in self._translate_stream_chunk(chunk, state):
                     yield translated
+            for translated in self._finalize_stream(state):
+                yield translated
         except Exception as e:
             if isinstance(
                 e,
