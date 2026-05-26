@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import base64
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 
 class TextContent(BaseModel):
@@ -18,12 +19,47 @@ class ImageContent(BaseModel):
     """Image content for multimodal messages.
 
     Supports both base64-encoded images and URLs.
+
+    Args:
+        type: Content-part discriminator. Always ``"image"``.
+        source_type: ``"base64"`` (default — ``data`` is a base64 string
+            *or* raw image bytes, see ``data`` below) or ``"url"``
+            (``data`` is an http(s) URL).
+        media_type: MIME type, e.g. ``"image/png"`` / ``"image/jpeg"``
+            / ``"image/webp"``. Ignored when ``source_type="url"``.
+        data: For ``source_type="base64"``, either a base64-encoded
+            ASCII string OR raw ``bytes`` — raw bytes are
+            auto-encoded for you (saves the caller a base64 line
+            when reading an image from disk / a buffer). For
+            ``source_type="url"``, the URL string. Always stored
+            internally as a ``str`` after construction.
     """
 
     type: Literal["image"] = "image"
     source_type: Literal["base64", "url"] = "base64"
     media_type: str = "image/png"
-    data: str  # base64 string or URL
+    data: str
+
+    @field_validator("data", mode="before")
+    @classmethod
+    def _bytes_to_base64(cls, v: Any) -> Any:
+        """Auto-encode raw image bytes to a base64 ASCII string.
+
+        Callers commonly hold raw bytes (from a file read, a Pillow
+        ``BytesIO``, a downloaded blob) and would otherwise have to
+        write ``base64.standard_b64encode(b).decode("ascii")`` at
+        every call site. This validator does it for them. Strings pass
+        through untouched — including base64 strings and URLs.
+
+        Only ``bytes`` / ``bytearray`` get the conversion treatment; if
+        you somehow have raw image bytes that happen to live behind a
+        ``source_type="url"`` (which makes no sense), the conversion
+        still runs, but you'd get a base64 string in a URL field —
+        garbage in, garbage out.
+        """
+        if isinstance(v, (bytes, bytearray)):
+            return base64.standard_b64encode(bytes(v)).decode("ascii")
+        return v
 
 
 ContentPart = TextContent | ImageContent

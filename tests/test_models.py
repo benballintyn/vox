@@ -84,6 +84,46 @@ class TestMessage:
         assert img.source_type == "url"
 
 
+class TestImageContent:
+    """Tests for ImageContent's bytes-friendly data accessor."""
+
+    def test_data_accepts_raw_bytes_and_base64_encodes(self) -> None:
+        """``ImageContent(data=raw_bytes)`` auto-encodes to a base64 ASCII string.
+
+        Saves callers the ``base64.standard_b64encode(b).decode("ascii")``
+        line that would otherwise live at every site that constructs an
+        image from a file read or a BytesIO buffer.
+        """
+        import base64
+
+        raw = b"\x89PNG\r\n\x1a\nfake"
+        # ``data`` is annotated ``str`` (its post-validation type); the
+        # validator accepts ``bytes`` and converts. mypy can't see the
+        # validator's wider input type, so silence the arg-type check.
+        img = ImageContent(data=raw, media_type="image/png")  # type: ignore[arg-type]
+        assert isinstance(img.data, str)
+        assert img.data == base64.standard_b64encode(raw).decode("ascii")
+
+    def test_data_accepts_bytearray(self) -> None:
+        import base64
+
+        raw = bytearray(b"\x89PNG\r\nbuf")
+        img = ImageContent(data=raw, media_type="image/png")  # type: ignore[arg-type]
+        assert img.data == base64.standard_b64encode(bytes(raw)).decode("ascii")
+
+    def test_data_string_passes_through(self) -> None:
+        """Strings (base64 or otherwise) are not re-encoded."""
+        already_b64 = "iVBORw0KGgo="
+        img = ImageContent(data=already_b64, media_type="image/png")
+        assert img.data == already_b64
+
+    def test_data_url_string_passes_through(self) -> None:
+        """URL strings under ``source_type="url"`` are not touched."""
+        url = "https://example.com/cat.jpg"
+        img = ImageContent(source_type="url", data=url)
+        assert img.data == url
+
+
 class TestTool:
     """Tests for Tool, ToolCall, and ToolResult models."""
 
