@@ -124,3 +124,23 @@ jobs:
           path: dist/
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # PEP 740 attestations are disabled because PyPI's Trusted
+          # Publishing currently does not support attestations from
+          # reusable-workflow invocations: when this workflow is called
+          # via ``workflow_call`` from ``release_please.yml``, the OIDC
+          # certificate used to sign the attestation embeds the
+          # *caller's* workflow_ref (``release_please.yml``), but PyPI's
+          # attestation verification rejects anything not matching the
+          # canonical trusted-publisher entry. The pypa action itself
+          # diagnoses this and recommends disabling attestations until
+          # PyPI upstream support lands — see
+          # https://github.com/pypa/gh-action-pypi-publish/issues/166
+          # and https://docs.pypi.org/trusted-publishers/troubleshooting/#reusable-workflows-on-github
+          #
+          # OIDC *trusted publishing* (the upload-authentication path)
+          # is untouched — that's the real security primitive and works
+          # fine through reusable workflows. We're only foregoing the
+          # bonus PEP 740 provenance signatures. Re-enable when PyPI's
+          # upstream support is announced.
+          attestations: false
