@@ -91,6 +91,71 @@ class TestMessageTranslation:
         assert fc_item["id"] == "fc_xyz", "outbound id must be the fc_* value"
         assert fc_item["call_id"] == "call_xyz", "call_id must remain the public id"
 
+    def test_assistant_tool_call_replays_reasoning_item(self, provider: OpenAIProvider) -> None:
+        """vox#25 — outbound emits the buffered reasoning item before fc.
+
+        Reasoning models (gpt-5) emit a ``reasoning`` item before each
+        function_call, and the Responses API rejects the assistant
+        message on subsequent turns if that reasoning item isn't
+        replayed. vox stashes it in
+        ``ToolCallData.provider_state["openai_reasoning_item"]``; the
+        outbound translator emits it as a peer item just before the
+        ``function_call`` item.
+        """
+        reasoning_item = {
+            "type": "reasoning",
+            "id": "rs_abc",
+            "encrypted_content": "opaque-encrypted-context",
+            "summary": [{"type": "summary_text", "text": "Looking up weather."}],
+        }
+        messages = [
+            Message(
+                role="assistant",
+                tool_calls=[
+                    ToolCallData(
+                        id="call_abc",
+                        name="weather",
+                        arguments={"city": "NYC"},
+                        provider_state={
+                            "openai_fc_id": "fc_abc",
+                            "openai_reasoning_item": reasoning_item,
+                        },
+                    ),
+                ],
+            ),
+        ]
+        items, _ = provider._translate_input(messages)
+        types = [i.get("type") for i in items]
+        assert "reasoning" in types
+        assert "function_call" in types
+        reasoning_idx = types.index("reasoning")
+        fc_idx = types.index("function_call")
+        assert reasoning_idx < fc_idx, "reasoning item must precede the function_call"
+        assert items[reasoning_idx] == reasoning_item, "reasoning item replayed verbatim"
+        assert items[fc_idx]["id"] == "fc_abc"
+        assert items[fc_idx]["call_id"] == "call_abc"
+
+    def test_assistant_tool_call_no_reasoning_item_omits_it(
+        self, provider: OpenAIProvider
+    ) -> None:
+        """When provider_state has no reasoning item, only function_call is emitted."""
+        messages = [
+            Message(
+                role="assistant",
+                tool_calls=[
+                    ToolCallData(
+                        id="call_abc",
+                        name="weather",
+                        arguments={"city": "NYC"},
+                        provider_state={"openai_fc_id": "fc_abc"},
+                    ),
+                ],
+            ),
+        ]
+        items, _ = provider._translate_input(messages)
+        assert not any(i.get("type") == "reasoning" for i in items)
+        assert any(i.get("type") == "function_call" for i in items)
+
     def test_assistant_tool_call_falls_back_to_id_without_provider_state(
         self, provider: OpenAIProvider
     ) -> None:
@@ -155,6 +220,106 @@ class TestResponseTranslation:
         assert len(result.message.tool_calls) == 1
         assert result.message.tool_calls[0].name == "weather"
         assert result.message.tool_calls[0].arguments == {"city": "NYC"}
+
+    def test_reasoning_item_attached_to_following_function_call(
+        self, provider: OpenAIProvider
+    ) -> None:
+        """vox#25 — the most recent reasoning item rides on the next fc.
+
+        When the response output contains a ``reasoning`` item followed
+        by a ``function_call`` item, vox stashes a faithful dict copy
+        of the reasoning item in the ToolCallData's provider_state so
+        the outbound translator can replay it. The buffer is consumed
+        after a single attachment, so a *second* function_call without
+        an intervening reasoning item does NOT receive the same item.
+        """
+        from unittest.mock import MagicMock
+
+        # Simulate a Pydantic-shaped SDK item: model_dump returns the
+        # full dict the outbound side should replay verbatim.
+        reasoning_payload = {
+            "type": "reasoning",
+            "id": "rs_xyz",
+            "encrypted_content": "ENCRYPTED",
+            "summary": [{"type": "summary_text", "text": "Thinking..."}],
+        }
+        reasoning_item = MagicMock()
+        reasoning_item.type = "reasoning"
+        reasoning_item.summary = []  # no thinking_block leak in this test
+        reasoning_item.model_dump.return_value = reasoning_payload
+
+        fc_item = MagicMock()
+        fc_item.type = "function_call"
+        fc_item.id = "fc_xyz"
+        fc_item.call_id = "call_xyz"
+        fc_item.name = "weather"
+        fc_item.arguments = '{"city": "NYC"}'
+
+        # Second function_call WITHOUT an intervening reasoning item —
+        # the buffer is consumed by the first, so this one's
+        # provider_state should not carry a reasoning item.
+        fc_item_2 = MagicMock()
+        fc_item_2.type = "function_call"
+        fc_item_2.id = "fc_xyz2"
+        fc_item_2.call_id = "call_xyz2"
+        fc_item_2.name = "weather"
+        fc_item_2.arguments = '{"city": "LA"}'
+
+        usage = MagicMock()
+        usage.input_tokens = 5
+        usage.output_tokens = 3
+        usage.reasoning_tokens = 4
+
+        mock_resp = MagicMock()
+        mock_resp.output = [reasoning_item, fc_item, fc_item_2]
+        mock_resp.usage = usage
+        mock_resp.status = "completed"
+        mock_resp.id = "resp_test"
+        mock_resp.incomplete_details = None
+
+        result = provider._translate_response(mock_resp, "gpt-5-mini")
+        assert result.message.tool_calls is not None
+        assert len(result.message.tool_calls) == 2
+        tc1, tc2 = result.message.tool_calls
+
+        assert tc1.provider_state is not None
+        assert tc1.provider_state["openai_fc_id"] == "fc_xyz"
+        assert tc1.provider_state["openai_reasoning_item"] == reasoning_payload
+
+        assert tc2.provider_state is not None
+        assert tc2.provider_state["openai_fc_id"] == "fc_xyz2"
+        assert "openai_reasoning_item" not in tc2.provider_state
+
+    def test_function_call_without_preceding_reasoning_has_no_item(
+        self, provider: OpenAIProvider
+    ) -> None:
+        """No reasoning item ⇒ provider_state carries only openai_fc_id."""
+        from unittest.mock import MagicMock
+
+        fc_item = MagicMock()
+        fc_item.type = "function_call"
+        fc_item.id = "fc_abc"
+        fc_item.call_id = "call_abc"
+        fc_item.name = "weather"
+        fc_item.arguments = "{}"
+
+        usage = MagicMock()
+        usage.input_tokens = 5
+        usage.output_tokens = 3
+        usage.reasoning_tokens = 0
+
+        mock_resp = MagicMock()
+        mock_resp.output = [fc_item]
+        mock_resp.usage = usage
+        mock_resp.status = "completed"
+        mock_resp.id = "resp_test"
+        mock_resp.incomplete_details = None
+
+        result = provider._translate_response(mock_resp, "gpt-4o")
+        assert result.message.tool_calls is not None
+        tc = result.message.tool_calls[0]
+        assert tc.provider_state is not None
+        assert "openai_reasoning_item" not in tc.provider_state
 
     def test_function_call_captures_both_ids(self, provider: OpenAIProvider) -> None:
         """vox#17 — capture the distinct fc_* and call_* IDs from the response.

@@ -51,6 +51,53 @@ def _import_openai() -> Any:
         ) from None
 
 
+def _serialize_reasoning_item(item: Any) -> dict[str, Any]:
+    """Capture a Responses-API reasoning output item as a round-trippable dict.
+
+    The Responses API requires the reasoning item that preceded a
+    ``function_call`` to be replayed on subsequent turns — without it
+    the API rejects the assistant message (vox#25). vox preserves the
+    item in the next ``ToolCallData.provider_state``; this helper
+    converts the SDK's reasoning item to a dict the API accepts back
+    as input verbatim.
+
+    Real SDK items are Pydantic BaseModels, so ``model_dump`` produces
+    a faithful round-trip including any ``encrypted_content`` payload
+    the model uses to carry internal context. A small fallback handles
+    test mocks that aren't real Pydantic models.
+
+    Args:
+        item: A Responses API output item of type ``reasoning``.
+
+    Returns:
+        A dict suitable for inclusion in the ``input`` list on a
+        subsequent ``responses.create`` call.
+    """
+    if hasattr(item, "model_dump"):
+        return item.model_dump(exclude_none=True, mode="json")
+
+    # Fallback for tests / unexpected shapes. Callers must supply
+    # concrete values (not auto-generated MagicMocks) for any field
+    # they want preserved; missing fields are silently omitted.
+    out: dict[str, Any] = {"type": "reasoning"}
+    item_id = getattr(item, "id", None)
+    if isinstance(item_id, str):
+        out["id"] = item_id
+    encrypted = getattr(item, "encrypted_content", None)
+    if isinstance(encrypted, str):
+        out["encrypted_content"] = encrypted
+    summary = getattr(item, "summary", None)
+    if isinstance(summary, list):
+        out["summary"] = [
+            {
+                "type": getattr(s, "type", "summary_text"),
+                "text": getattr(s, "text", ""),
+            }
+            for s in summary
+        ]
+    return out
+
+
 def _extract_retry_after(exc: Exception) -> float | None:
     """Pull a Retry-After value out of an SDK exception's response headers.
 
@@ -177,9 +224,20 @@ class OpenAIProvider(Provider):
                 # back to ``tc.id`` for ToolCallData built from scratch
                 # (e.g. tests) — those flows aren't sending back a
                 # previously-issued ID anyway.
+                #
+                # Reasoning models additionally require the preceding
+                # ``reasoning`` item to be replayed alongside each
+                # function_call (vox#25). When the inbound translator
+                # captured one, it's stashed in
+                # ``provider_state["openai_reasoning_item"]``; emit it
+                # as a peer input item just before the function_call.
                 if msg.tool_calls:
                     for tc in msg.tool_calls:
-                        fc_id = (tc.provider_state or {}).get("openai_fc_id", tc.id)
+                        state = tc.provider_state or {}
+                        reasoning_item = state.get("openai_reasoning_item")
+                        if reasoning_item is not None:
+                            items.append(reasoning_item)
+                        fc_id = state.get("openai_fc_id", tc.id)
                         items.append(
                             {
                                 "type": "function_call",
@@ -380,6 +438,11 @@ class OpenAIProvider(Provider):
         text_parts: list[str] = []
         tool_calls: list[ToolCallData] = []
         thinking_blocks: list[ThinkingBlock] = []
+        # Buffer the most recent reasoning item so the next function_call
+        # can attach it to its provider_state (vox#25). gpt-5 emits a
+        # ``reasoning`` item right before each tool call; the Responses
+        # API requires it to be replayed on subsequent turns.
+        last_reasoning_item: dict[str, Any] | None = None
 
         for item in response.output:
             item_type = getattr(item, "type", None)
@@ -401,19 +464,32 @@ class OpenAIProvider(Provider):
                 # outbound translator for why both are needed.
                 call_id = getattr(item, "call_id", None) or item.id
                 fc_id = getattr(item, "id", None) or call_id
+                provider_state: dict[str, Any] = {"openai_fc_id": fc_id}
+                # Attach the preceding reasoning item (if any) so the
+                # outbound translator can replay it on the next turn
+                # — required by the API for reasoning models (vox#25).
+                # Consume the buffer so subsequent function_calls in
+                # the same response don't replay the same item.
+                if last_reasoning_item is not None:
+                    provider_state["openai_reasoning_item"] = last_reasoning_item
+                    last_reasoning_item = None
                 tool_calls.append(
                     ToolCallData(
                         id=call_id,
                         name=item.name,
                         arguments=json.loads(args_str) if args_str else {},
-                        provider_state={"openai_fc_id": fc_id},
+                        provider_state=provider_state,
                     )
                 )
 
             elif item_type == "reasoning":
+                # Expose the human-readable summary on ``response.thinking``
+                # (existing behavior) AND capture the full item dict for
+                # outbound round-tripping (vox#25).
                 for summary in getattr(item, "summary", []):
                     if hasattr(summary, "text"):
                         thinking_blocks.append(ThinkingBlock(text=summary.text))
+                last_reasoning_item = _serialize_reasoning_item(item)
 
         message = Message(
             role="assistant",
