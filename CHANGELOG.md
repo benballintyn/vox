@@ -4,6 +4,13 @@ All notable changes to vox are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0](https://github.com/benballintyn/vox/compare/v0.1.2...v0.2.0) (2026-05-26)
+
+
+### Features
+
+* **messages:** accept raw bytes in ImageContent + multimodal combo coverage ([#30](https://github.com/benballintyn/vox/issues/30)) ([f2d5fa4](https://github.com/benballintyn/vox/commit/f2d5fa412e9c7d153cb03355f1c377787a2dcbf1))
+
 ## [0.1.2](https://github.com/benballintyn/vox/compare/v0.1.1...v0.1.2) (2026-05-26)
 
 
