@@ -4,6 +4,13 @@ All notable changes to vox are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1](https://github.com/benballintyn/vox/compare/v0.3.0...v0.3.1) (2026-05-26)
+
+
+### Documentation
+
+* add HANDOFF.md; promote audio I/O + video input to roadmap priority ([#35](https://github.com/benballintyn/vox/issues/35)) ([f09998c](https://github.com/benballintyn/vox/commit/f09998c65c0ae29ecfae7c5c312f1a3bd0c3da0a))
+
 ## [0.3.0](https://github.com/benballintyn/vox/compare/v0.2.0...v0.3.0) (2026-05-26)
 
 
