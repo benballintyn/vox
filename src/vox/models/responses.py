@@ -72,6 +72,17 @@ class Usage(BaseModel):
         reasoning_tokens: Tokens used for reasoning/thinking.
         cache_read_tokens: Tokens read from cache.
         cache_creation_tokens: Tokens used to create cache entries.
+        model: Model identifier that produced this usage. Populated by
+            ``VoxClient`` from the request's ``model`` argument so
+            ``Usage`` is priceable standalone (without needing a
+            separate handle to the response / request).
+        estimated_cost: Estimated USD cost computed by
+            :func:`vox.estimate_cost` against vox's built-in price
+            snapshot (or a ``custom_pricing`` override passed to
+            ``VoxClient``). ``None`` when the model is unknown to the
+            pricing table or when the ``Usage`` was constructed
+            manually outside ``VoxClient``. Estimate only — not a
+            substitute for the provider's authoritative billing.
     """
 
     prompt_tokens: int = 0
@@ -80,6 +91,8 @@ class Usage(BaseModel):
     reasoning_tokens: int = 0
     cache_read_tokens: int = 0
     cache_creation_tokens: int = 0
+    model: str | None = None
+    estimated_cost: float | None = None
 
 
 class CompletionResponse(BaseModel):

@@ -40,9 +40,13 @@ The one exception is correctness work, which happens regardless of demand.
   `max_retries`. A vox-level, configurable retry policy that honours the
   `retry_after` already extracted onto `RateLimitError` would give
   consistent behaviour across providers.
-- **Token counting + cost estimation.** No pre-flight token counting and no
-  cost figure derived from `Usage`. A per-model price table + a
-  `usage.estimated_cost` would help budgeting in consumers.
+- **Pre-flight token counting.** Each provider has its own tokenizer
+  (tiktoken for OpenAI, Anthropic's tokenizer endpoint, etc.). Adding
+  one would let consumers estimate token usage before paying for the
+  API call. Heavier than cost estimation; held until a consumer pulls.
+  (Post-flight **cost estimation** shipped in **v0.3.0** —
+  `usage.estimated_cost` + the built-in `MODEL_PRICING` snapshot + a
+  `custom_pricing` override on `VoxClient`. See `vox._pricing`.)
 - **OpenAI stop sequences.** The Responses API has no `stop` parameter, so
   `stop` is silently dropped for the OpenAI provider. If a consumer needs
   it, it can be emulated with a `logit_bias` on the stop-token IDs.
