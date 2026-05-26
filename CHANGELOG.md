@@ -4,6 +4,13 @@ All notable changes to vox are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0](https://github.com/benballintyn/vox/compare/v0.2.0...v0.3.0) (2026-05-26)
+
+
+### Features
+
+* **pricing:** post-flight cost estimation on Usage ([#33](https://github.com/benballintyn/vox/issues/33)) ([bccffff](https://github.com/benballintyn/vox/commit/bccffffb65d52aeae535570cd502f6e08a881603))
+
 ## [0.2.0](https://github.com/benballintyn/vox/compare/v0.1.2...v0.2.0) (2026-05-26)
 
 
