@@ -12,11 +12,23 @@ not a vox bug. The contract under test is **the vision pipeline
 ingested the image and produced a color-family answer**; a broken
 pipeline would yield something unrelated (e.g. "I don't see an image"
 or guessing a non-red color), not "pink".
+
+This file also covers two multimodal *combinations* downstream
+consumers rely on (e.g. Tomte's identify-thing pipeline):
+
+* **Image + tools** — the outer agent-loop pattern (full tool registry
+  available; image in the user turn).
+* **Image + ``response_schema``** — the terminal structured-output
+  pattern (no tools on the call; model produces a validated dataclass).
 """
 
 from __future__ import annotations
 
-from vox import ImageContent, Message, TextContent, VoxClient
+from typing import Literal
+
+from pydantic import BaseModel, Field
+
+from vox import ImageContent, Message, TextContent, Tool, VoxClient
 
 from .conftest import ProviderProfile
 
@@ -101,3 +113,153 @@ async def test_vision_async_parity(
         max_tokens=1024,
     )
     _assert_red_family(response.message.text)
+
+
+# ── Multimodal combinations ────────────────────────────────────────────
+
+
+# A small tool the model is asked to call when shown the image. The
+# only "right" tool to call given the prompt — easier to force via
+# prompt-engineering than to pass provider-specific ``tool_choice``.
+_RECORD_COLOR_TOOL = Tool(
+    name="record_color",
+    description=("Record the dominant color visible in an image the user provided."),
+    parameters={
+        "type": "object",
+        "properties": {
+            "color": {
+                "type": "string",
+                "description": "The dominant color filling the image.",
+            },
+        },
+        "required": ["color"],
+    },
+)
+
+
+def test_vision_with_tools(
+    vision_profile: ProviderProfile,
+    client: VoxClient,
+    red_square_b64: str,
+) -> None:
+    """Image + tool registry in one call → the outer agent-loop pattern.
+
+    Sends the red-square image alongside a ``record_color`` tool. The
+    prompt forces the model to use the tool. Asserts the model called
+    it with a red-family color — proving both that (a) the image was
+    ingested and (b) the tool path coexisted with the image content
+    in a single ``complete()`` call.
+
+    Surfaces a regression on any provider where the combination of
+    ``content=[TextContent, ImageContent]`` and ``tools=[...]`` is
+    rejected or silently mishandled — the two code paths are
+    orthogonal in the translator today, but only this test exercises
+    them together end-to-end.
+    """
+    response = client.complete(
+        [
+            Message(
+                role="user",
+                content=[
+                    TextContent(
+                        text=(
+                            "Look at this image and record the dominant "
+                            "color using the record_color tool. Reply only "
+                            "by calling the tool."
+                        )
+                    ),
+                    ImageContent(data=red_square_b64, media_type="image/png"),
+                ],
+            )
+        ],
+        model=vision_profile.model,
+        provider=vision_profile.name,
+        tools=[_RECORD_COLOR_TOOL],
+        max_tokens=1024,
+    )
+
+    assert response.finish_reason == "tool_calls", (
+        f"expected tool_calls finish reason; got {response.finish_reason!r} "
+        f"with text {response.message.text!r}"
+    )
+    assert response.message.tool_calls, "no tool_calls on the response"
+    record_calls = [tc for tc in response.message.tool_calls if tc.name == "record_color"]
+    assert record_calls, (
+        f"no record_color call; got {[tc.name for tc in response.message.tool_calls]}"
+    )
+    args = record_calls[0].arguments
+    assert isinstance(args, dict)
+    assert "color" in args, f"expected 'color' in arguments; got {args}"
+    color_lower = str(args["color"]).lower()
+    matched = next((c for c in _RED_FAMILY if c in color_lower), None)
+    assert matched, f"tool was called but with a non-red color; got {args['color']!r}"
+
+
+class _ColorObservation(BaseModel):
+    """Structured-output target for the vision-keystone test.
+
+    Shape intentionally close to Tomte's ``ApplianceIdentification``:
+    a Literal-enum-style classification (``brightness``), a numeric
+    confidence, plus a list field. Anthropic / Gemini / OpenAI all
+    have to round-trip the full nested shape via vox's structured
+    output path AND see the image to fill ``color``.
+    """
+
+    color: str = Field(description="The dominant color in the image.")
+    brightness: Literal["dark", "bright"] = Field(
+        description="Whether the image appears dark or bright overall."
+    )
+    confidence: float = Field(
+        ge=0.0,
+        le=1.0,
+        description="Confidence in the color identification, 0..1.",
+    )
+    notes: list[str] = Field(
+        default_factory=list,
+        description="Any caveats about the identification.",
+    )
+
+
+def test_vision_with_response_schema(
+    vision_profile: ProviderProfile,
+    client: VoxClient,
+    red_square_b64: str,
+) -> None:
+    """Image + ``response_schema`` → the terminal structured-output pattern.
+
+    The keystone of Tomte's ``identify_thing`` flow: a call that
+    receives an image and produces a validated dataclass as its
+    ``response.parsed``. No other tools on this call (the structured
+    output IS the terminal answer).
+
+    Asserts ``parsed`` is a ``_ColorObservation`` instance with a
+    red-family ``color`` value. Other fields just need to validate
+    against the schema — values aren't asserted on, since this is a
+    translation test, not a model-judgement test.
+    """
+    response = client.complete(
+        [
+            Message(
+                role="user",
+                content=[
+                    TextContent(
+                        text=(
+                            "Identify the dominant color in this image and "
+                            "return a structured observation."
+                        )
+                    ),
+                    ImageContent(data=red_square_b64, media_type="image/png"),
+                ],
+            )
+        ],
+        model=vision_profile.model,
+        provider=vision_profile.name,
+        response_schema=_ColorObservation,
+        max_tokens=2048,
+    )
+
+    assert response.parsed is not None, "response.parsed was not populated"
+    assert isinstance(response.parsed, _ColorObservation)
+    color_lower = response.parsed.color.lower()
+    matched = next((c for c in _RED_FAMILY if c in color_lower), None)
+    assert matched, f"structured-output color is not red-family; got {response.parsed.color!r}"
