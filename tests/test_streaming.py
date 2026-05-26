@@ -171,19 +171,25 @@ class TestChatCompletionsStreaming:
     def test_finish_reason_normalized(
         self, chat_completions_provider: ChatCompletionsProvider
     ) -> None:
-        """Native 'tool_calls' should normalize to 'tool_calls'."""
-        chunks = chat_completions_provider._translate_stream_chunk(
-            _cc_chunk(finish_reason="tool_calls")
+        """Native 'tool_calls' normalizes to 'tool_calls' (emitted at finalize).
+
+        finish_reason is now buffered by ``_translate_stream_chunk``; the
+        ``done`` chunk emerges from ``_finalize_stream`` at end-of-stream.
+        """
+        state: dict = {}
+        chat_completions_provider._translate_stream_chunk(
+            _cc_chunk(finish_reason="tool_calls"), state
         )
-        assert any(c.type == "done" and c.finish_reason == "tool_calls" for c in chunks)
+        finalized = chat_completions_provider._finalize_stream(state)
+        assert any(c.type == "done" and c.finish_reason == "tool_calls" for c in finalized)
 
     def test_length_finish_reason_normalized(
         self, chat_completions_provider: ChatCompletionsProvider
     ) -> None:
-        chunks = chat_completions_provider._translate_stream_chunk(
-            _cc_chunk(finish_reason="length")
-        )
-        assert any(c.type == "done" and c.finish_reason == "length" for c in chunks)
+        state: dict = {}
+        chat_completions_provider._translate_stream_chunk(_cc_chunk(finish_reason="length"), state)
+        finalized = chat_completions_provider._finalize_stream(state)
+        assert any(c.type == "done" and c.finish_reason == "length" for c in finalized)
 
     def test_usage_final_chunk(self, chat_completions_provider: ChatCompletionsProvider) -> None:
         chunks = chat_completions_provider._translate_stream_chunk(_cc_chunk(usage=(100, 50, 150)))
@@ -200,24 +206,138 @@ class TestChatCompletionsStreaming:
         chunks = chat_completions_provider._translate_stream_chunk(chunk)
         assert chunks == []
 
-    def test_finish_reason_emitted_only_once_per_stream(
+    def test_usage_extracted_from_chunk_with_choices(
         self, chat_completions_provider: ChatCompletionsProvider
     ) -> None:
-        """Some proxied providers (e.g. OpenRouter) send ``finish_reason`` on
-        more than one chunk near end-of-stream. vox dedups so consumers see
-        exactly one ``done`` chunk per stream.
+        """vox#27 — accept ``usage`` from a chunk that also has ``choices``.
+
+        Direct OpenAI sends a final ``choices=[]`` chunk carrying usage,
+        but OpenRouter (and others) include usage on the *same* chunk as
+        the final content / ``finish_reason``. vox now accepts both
+        shapes and emits exactly one ``usage`` chunk in either case,
+        ordered before ``done``.
+        """
+        # Build a chunk that has BOTH content and usage — the OpenRouter shape.
+        chunk = MagicMock()
+        chunk.usage = MagicMock()
+        chunk.usage.prompt_tokens = 100
+        chunk.usage.completion_tokens = 50
+        chunk.usage.total_tokens = 150
+
+        choice = MagicMock()
+        choice.finish_reason = "stop"
+        delta = MagicMock()
+        delta.content = "world"
+        delta.tool_calls = None
+        choice.delta = delta
+        chunk.choices = [choice]
+
+        state: dict = {}
+        emitted = chat_completions_provider._translate_stream_chunk(chunk, state)
+        # finish_reason is buffered, so done emerges only at finalize.
+        emitted += chat_completions_provider._finalize_stream(state)
+        types = [c.type for c in emitted]
+        # Order must be text → usage → done.
+        assert types == ["text", "usage", "done"], f"unexpected order: {types}"
+        usage_chunk = next(c for c in emitted if c.type == "usage")
+        assert usage_chunk.usage is not None
+        assert usage_chunk.usage.total_tokens == 150
+
+    def test_usage_emitted_only_once_across_chunks(
+        self, chat_completions_provider: ChatCompletionsProvider
+    ) -> None:
+        """Repeated ``usage`` across chunks dedups to a single emission.
+
+        Belt-and-suspenders for providers that report usage on both a
+        content chunk and a trailing choices=[] chunk.
+        """
+        state: dict = {}
+        # First chunk: content + usage (OpenRouter shape).
+        first = MagicMock()
+        first.usage = MagicMock()
+        first.usage.prompt_tokens = 10
+        first.usage.completion_tokens = 5
+        first.usage.total_tokens = 15
+        choice = MagicMock()
+        choice.finish_reason = None
+        delta = MagicMock()
+        delta.content = "hi"
+        delta.tool_calls = None
+        choice.delta = delta
+        first.choices = [choice]
+        chunks_a = chat_completions_provider._translate_stream_chunk(first, state)
+        assert any(c.type == "usage" for c in chunks_a)
+        assert state["usage_emitted"] is True
+
+        # Second chunk: trailing usage-only (direct-OpenAI shape).
+        second = MagicMock()
+        second.usage = MagicMock()
+        second.usage.prompt_tokens = 10
+        second.usage.completion_tokens = 5
+        second.usage.total_tokens = 15
+        second.choices = []
+        chunks_b = chat_completions_provider._translate_stream_chunk(second, state)
+        assert not any(c.type == "usage" for c in chunks_b), (
+            "usage emitted twice despite state guard"
+        )
+
+    def test_finish_reason_dedupped_to_single_buffered(
+        self, chat_completions_provider: ChatCompletionsProvider
+    ) -> None:
+        """Repeated finish_reason across chunks buffers only the first.
+
+        Some proxied providers (OpenRouter especially) send
+        ``finish_reason`` on more than one chunk near end-of-stream.
+        The translator buffers only the first sighting; subsequent
+        sightings are silently dropped. ``_finalize_stream`` then emits
+        exactly one ``done`` chunk per stream regardless.
         """
         state: dict = {}
         first = chat_completions_provider._translate_stream_chunk(
             _cc_chunk(finish_reason="stop"), state
         )
+        # Buffering — no done emitted yet on the per-chunk path.
+        assert not any(c.type == "done" for c in first)
+        assert state["buffered_finish_reason"] == "stop"
+
         second = chat_completions_provider._translate_stream_chunk(
-            _cc_chunk(finish_reason="stop"), state
+            _cc_chunk(finish_reason="length"), state
         )
-        assert any(c.type == "done" for c in first)
-        assert not any(c.type == "done" for c in second), (
-            "vox emitted a second 'done' chunk; state-based dedup didn't take"
+        assert not any(c.type == "done" for c in second)
+        # First-write-wins: the second finish_reason doesn't clobber.
+        assert state["buffered_finish_reason"] == "stop"
+
+        finalized = chat_completions_provider._finalize_stream(state)
+        done_chunks = [c for c in finalized if c.type == "done"]
+        assert len(done_chunks) == 1, f"expected exactly one done at finalize; got {finalized}"
+        assert done_chunks[0].finish_reason == "stop"
+
+    def test_usage_emitted_before_done_when_usage_arrives_after(
+        self, chat_completions_provider: ChatCompletionsProvider
+    ) -> None:
+        """vox#27 — usage on a trailing chunk still lands before ``done``.
+
+        OpenRouter (and direct OpenAI with the deprecated include_usage)
+        delivers ``usage`` on a chunk AFTER the finish_reason chunk.
+        By buffering finish_reason and flushing ``done`` at
+        ``_finalize_stream``, vox ensures the cross-provider contract
+        ``text → usage → done`` holds even in that arrival order.
+        """
+        state: dict = {}
+        emitted: list = []
+        # Final content chunk with finish_reason but no usage.
+        emitted += chat_completions_provider._translate_stream_chunk(
+            _cc_chunk(content="bye", finish_reason="stop"), state
         )
+        # Trailing usage-only chunk.
+        emitted += chat_completions_provider._translate_stream_chunk(
+            _cc_chunk(usage=(100, 50, 150)), state
+        )
+        # End-of-stream flush.
+        emitted += chat_completions_provider._finalize_stream(state)
+
+        types = [c.type for c in emitted]
+        assert types == ["text", "usage", "done"], f"expected text → usage → done; got {types}"
 
 
 # ───────────────────────────────────────────────────────────────────────────
