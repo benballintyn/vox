@@ -465,15 +465,23 @@ class GeminiProvider(Provider):
 
     # ── Stream translation ───────────────────────────────────────────────
 
-    def _translate_stream_chunk(self, chunk: Any) -> list[StreamChunk]:
+    def _translate_stream_chunk(
+        self, chunk: Any, state: dict[str, Any] | None = None
+    ) -> list[StreamChunk]:
         """Translate a Gemini stream chunk to StreamChunks.
 
         Args:
             chunk: A raw SDK stream chunk.
+            state: Mutable per-stream state. Used to emit a single
+                ``usage`` chunk only once even if successive SDK chunks
+                carry ``usage_metadata`` (Gemini emits it on every
+                chunk, not just the final one).
 
         Returns:
             List of StreamChunk instances (may be empty).
         """
+        if state is None:
+            state = {}
         results: list[StreamChunk] = []
 
         if not chunk.candidates:
@@ -491,9 +499,13 @@ class GeminiProvider(Provider):
                 elif hasattr(part, "function_call") and part.function_call:
                     fc = part.function_call
                     # Same thought_signature capture as the non-streaming
-                    # path — preserved for outbound round-trips.
+                    # path — preserved on the ToolCallData's provider_state
+                    # for outbound round-trips. Note: this is the
+                    # *per-tool-call* state passed to ``ToolCallData``,
+                    # distinct from the ``state`` parameter (per-stream
+                    # buffer for usage_metadata). Don't shadow.
                     sig = getattr(part, "thought_signature", None)
-                    state = {"gemini_thought_signature": sig} if sig is not None else None
+                    tc_state = {"gemini_thought_signature": sig} if sig is not None else None
                     results.append(
                         StreamChunk(
                             type="tool_call_start",
@@ -501,12 +513,21 @@ class GeminiProvider(Provider):
                                 id=f"call_{uuid.uuid4().hex[:8]}",
                                 name=fc.name,
                                 arguments=dict(fc.args) if fc.args else {},
-                                provider_state=state,
+                                provider_state=tc_state,
                             ),
                         )
                     )
 
-        # Check for finish reason
+        # Buffer the most recent usage_metadata. Gemini emits it on
+        # every stream chunk, growing as the response progresses; we
+        # only want to surface a single ``usage`` chunk at end-of-stream
+        # so consumers see consistent totals. Held in ``state`` and
+        # flushed when a finish_reason arrives.
+        usage_metadata = getattr(chunk, "usage_metadata", None)
+        if usage_metadata is not None:
+            state["latest_usage_metadata"] = usage_metadata
+
+        # Check for finish reason — emit usage (if buffered) then done.
         fr = getattr(candidate, "finish_reason", None)
         if fr:
             raw = getattr(fr, "name", str(fr)).lower()
@@ -518,6 +539,20 @@ class GeminiProvider(Provider):
             # ``tool_calls`` instead — same cross-provider contract.
             if normalized == "stop" and any(r.type == "tool_call_start" for r in results):
                 normalized = "tool_calls"
+
+            buffered = state.pop("latest_usage_metadata", None)
+            if buffered is not None:
+                results.append(
+                    StreamChunk(
+                        type="usage",
+                        usage=Usage(
+                            prompt_tokens=getattr(buffered, "prompt_token_count", 0) or 0,
+                            completion_tokens=getattr(buffered, "candidates_token_count", 0) or 0,
+                            total_tokens=getattr(buffered, "total_token_count", 0) or 0,
+                            reasoning_tokens=getattr(buffered, "thinking_token_count", 0) or 0,
+                        ),
+                    )
+                )
             results.append(StreamChunk(type="done", finish_reason=normalized))
 
         return results
@@ -703,9 +738,13 @@ class GeminiProvider(Provider):
         if tools:
             gen_kwargs["config"].tools = self._translate_tools(tools)
 
+        # Per-stream state for the chunk translator (buffers
+        # ``usage_metadata`` so only a single ``usage`` StreamChunk is
+        # emitted, at end-of-stream).
+        state: dict[str, Any] = {}
         try:
             for chunk in self._get_client().models.generate_content_stream(**gen_kwargs):
-                yield from self._translate_stream_chunk(chunk)
+                yield from self._translate_stream_chunk(chunk, state)
         except Exception as e:
             from ..errors import VoxError
 
@@ -768,11 +807,12 @@ class GeminiProvider(Provider):
         if tools:
             gen_kwargs["config"].tools = self._translate_tools(tools)
 
+        state: dict[str, Any] = {}
         try:
             async for chunk in await self._get_client().aio.models.generate_content_stream(
                 **gen_kwargs
             ):
-                for sc in self._translate_stream_chunk(chunk):
+                for sc in self._translate_stream_chunk(chunk, state):
                     yield sc
         except Exception as e:
             from ..errors import VoxError

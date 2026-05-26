@@ -530,76 +530,118 @@ class OpenAIProvider(Provider):
 
     # ── Streaming helpers ────────────────────────────────────────────────
 
-    def _process_stream_event(self, event: Any) -> StreamChunk | None:
-        """Translate a Responses API stream event to a StreamChunk.
+    def _process_stream_event(
+        self, event: Any, state: dict[str, Any] | None = None
+    ) -> list[StreamChunk]:
+        """Translate a Responses API stream event to ``StreamChunk``s.
 
         Args:
             event: A raw SDK stream event.
+            state: Mutable per-stream state. Carries:
+
+                * ``item_id_to_call_id`` — map populated when
+                  ``response.output_item.added`` arrives for a
+                  function_call (the item has both an ``id`` (``fc_*``)
+                  and ``call_id`` (``call_*``)). Used to resolve
+                  ``function_call_arguments.delta`` events (which only
+                  carry ``item_id``) to the ``call_id`` consumers see
+                  on the start chunk (vox#20).
 
         Returns:
-            A StreamChunk, or None if the event should be skipped.
+            List of ``StreamChunk`` instances (often empty).
         """
+        if state is None:
+            state = {}
         event_type = getattr(event, "type", None)
 
         if event_type == "response.output_text.delta":
-            return StreamChunk(type="text", text=event.delta)
+            return [StreamChunk(type="text", text=event.delta)]
 
         if event_type == "response.function_call_arguments.delta":
-            return StreamChunk(
-                type="tool_call_delta",
-                tool_call_id=getattr(event, "call_id", ""),
-                arguments_delta=event.delta,
-            )
+            # The SDK emits ``item_id`` (the fc_* output-item id) on
+            # delta events — NOT ``call_id``. vox previously read
+            # ``event.call_id`` and got "" on every delta, breaking
+            # the consumer-side correlation by tool_call_id (vox#20).
+            # Resolve via the buffered item_id → call_id map.
+            item_id = getattr(event, "item_id", None) or getattr(event, "call_id", "")
+            mapping = state.get("item_id_to_call_id", {})
+            tool_call_id = mapping.get(item_id, item_id)
+            return [
+                StreamChunk(
+                    type="tool_call_delta",
+                    tool_call_id=tool_call_id,
+                    arguments_delta=event.delta,
+                )
+            ]
 
         if event_type == "response.output_item.added":
             item = event.item
             if getattr(item, "type", None) == "function_call":
-                # Same dual-ID handling as the non-streaming path. The
-                # explicit ``str(...)`` coercions guarantee mypy sees a
-                # ``str`` (rather than ``Any | None``) — SDK getattrs
-                # return ``Any``, so without coercion the ``or`` chain
-                # widens to a nullable.
+                # ``str(...)`` coercion: getattrs return ``Any``, so the
+                # ``or`` chain widens to a nullable in mypy's eyes.
                 call_id = str(getattr(item, "call_id", None) or getattr(item, "id", "") or "")
                 fc_id = str(getattr(item, "id", None) or call_id)
-                return StreamChunk(
-                    type="tool_call_start",
-                    tool_call=ToolCallData(
-                        id=call_id,
-                        name=getattr(item, "name", ""),
-                        arguments={},
-                        provider_state={"openai_fc_id": fc_id},
-                    ),
-                )
+                # Buffer the fc_* → call_* mapping for upcoming
+                # arguments.delta events (vox#20) — those events carry
+                # only ``item_id`` (the fc_*), but consumers correlate
+                # via the call_* that landed on this start chunk.
+                state.setdefault("item_id_to_call_id", {})[fc_id] = call_id
+                return [
+                    StreamChunk(
+                        type="tool_call_start",
+                        tool_call=ToolCallData(
+                            id=call_id,
+                            name=getattr(item, "name", ""),
+                            arguments={},
+                            # Preserve fc_* so the round-trip outbound
+                            # translator can use it as ``input[*].id`` on
+                            # subsequent turns (vox#17).
+                            provider_state={"openai_fc_id": fc_id},
+                        ),
+                    )
+                ]
+            return []
 
         if event_type == "response.reasoning_summary_text.delta":
-            return StreamChunk(type="thinking", thinking_text=event.delta)
+            return [StreamChunk(type="thinking", thinking_text=event.delta)]
 
         if event_type == "response.completed":
+            # Previously vox attached ``usage`` to the ``done`` chunk
+            # rather than emitting a separate ``type="usage"`` chunk
+            # — consumers iterating chunk types never saw a usage
+            # chunk (vox#18). Now emit two chunks in order: usage, then
+            # done.
             resp = event.response
-            usage = None
+            results: list[StreamChunk] = []
             if resp.usage:
-                usage = Usage(
-                    prompt_tokens=getattr(resp.usage, "input_tokens", 0) or 0,
-                    completion_tokens=getattr(resp.usage, "output_tokens", 0) or 0,
-                    total_tokens=(
-                        (getattr(resp.usage, "input_tokens", 0) or 0)
-                        + (getattr(resp.usage, "output_tokens", 0) or 0)
-                    ),
-                    reasoning_tokens=getattr(resp.usage, "reasoning_tokens", 0) or 0,
+                results.append(
+                    StreamChunk(
+                        type="usage",
+                        usage=Usage(
+                            prompt_tokens=getattr(resp.usage, "input_tokens", 0) or 0,
+                            completion_tokens=getattr(resp.usage, "output_tokens", 0) or 0,
+                            total_tokens=(
+                                (getattr(resp.usage, "input_tokens", 0) or 0)
+                                + (getattr(resp.usage, "output_tokens", 0) or 0)
+                            ),
+                            reasoning_tokens=getattr(resp.usage, "reasoning_tokens", 0) or 0,
+                        ),
+                    )
                 )
-            # Synthesize a finish reason from the final response state.
             has_tool_calls = any(
                 getattr(item, "type", None) == "function_call"
                 for item in getattr(resp, "output", []) or []
             )
             raw_finish = self._extract_raw_finish_reason(resp, has_tool_calls=has_tool_calls)
-            return StreamChunk(
-                type="done",
-                finish_reason=normalize_finish_reason(raw_finish),
-                usage=usage,
+            results.append(
+                StreamChunk(
+                    type="done",
+                    finish_reason=normalize_finish_reason(raw_finish),
+                )
             )
+            return results
 
-        return None
+        return []
 
     # ── Public API ───────────────────────────────────────────────────────
 
@@ -767,12 +809,15 @@ class OpenAIProvider(Provider):
             stream=True,
             **kwargs,
         )
+        # Per-stream state for the event translator: maps function_call
+        # item_id (fc_*) → call_id (call_*) so argument-delta events
+        # (which only carry item_id) can be tagged with the call_id
+        # consumers see on the start chunk (vox#20).
+        state: dict[str, Any] = {}
         try:
             response_stream = self._get_sync_client().responses.create(**request)
             for event in response_stream:
-                chunk = self._process_stream_event(event)
-                if chunk:
-                    yield chunk
+                yield from self._process_stream_event(event, state)
         except Exception as e:
             from ..errors import VoxError
 
@@ -826,11 +871,11 @@ class OpenAIProvider(Provider):
             stream=True,
             **kwargs,
         )
+        state: dict[str, Any] = {}
         try:
             response_stream = await self._get_async_client().responses.create(**request)
             async for event in response_stream:
-                chunk = self._process_stream_event(event)
-                if chunk:
+                for chunk in self._process_stream_event(event, state):
                     yield chunk
         except Exception as e:
             from ..errors import VoxError
