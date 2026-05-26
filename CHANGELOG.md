@@ -4,6 +4,23 @@ All notable changes to vox are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2](https://github.com/benballintyn/vox/compare/v0.1.1...v0.1.2) (2026-05-26)
+
+
+### Bug Fixes
+
+* **gemini:** missing model kwarg + tool-call finish_reason; add live integration suite ([#16](https://github.com/benballintyn/vox/issues/16)) ([c7ee002](https://github.com/benballintyn/vox/commit/c7ee0021e92bf32c93a9e3d33c6e584796fbbf69))
+* **openai:** enforce strict-mode JSON Schema for structured output ([#23](https://github.com/benballintyn/vox/issues/23)) ([295744a](https://github.com/benballintyn/vox/commit/295744a46adfc5bc2f19e324cf0308b15af2f6e6))
+* **openai:** preserve and replay reasoning items on tool round-trip ([#28](https://github.com/benballintyn/vox/issues/28)) ([faf2abb](https://github.com/benballintyn/vox/commit/faf2abb550ed1b850101e666d066e8e6bba3c036))
+* **openrouter:** extract usage from chunks that also carry choices ([#29](https://github.com/benballintyn/vox/issues/29)) ([f086b70](https://github.com/benballintyn/vox/commit/f086b70b0660d02d6468a47fc9fa9d6d40c2d909))
+* **streaming:** usage chunks, ordering, and tool-arg delta correlation ([#26](https://github.com/benballintyn/vox/issues/26)) ([d95a4d5](https://github.com/benballintyn/vox/commit/d95a4d5cdc31f02b20d1c5eca237ba31b1e1d75a))
+* **tools:** preserve provider-specific tool-call state across turns ([#24](https://github.com/benballintyn/vox/issues/24)) ([7adfc5c](https://github.com/benballintyn/vox/commit/7adfc5cbcaa68f4088ef7661407c21d2f16d249d))
+
+
+### Documentation
+
+* add ROADMAP.md with forward-looking next steps ([#14](https://github.com/benballintyn/vox/issues/14)) ([8e805ed](https://github.com/benballintyn/vox/commit/8e805edbca44c786b82fbec411bfafefbb04be08))
+
 ## [0.1.1](https://github.com/benballintyn/vox/compare/v0.1.0...v0.1.1) (2026-05-22)
 
 
