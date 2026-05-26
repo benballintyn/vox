@@ -28,6 +28,34 @@ The one exception is correctness work, which happens regardless of demand.
   asserts the translation still holds. This is the highest-value next step —
   it protects every other feature.
 
+## Priority candidates — build proactively, ahead of demand
+
+These are flagged above the standard demand-driven list because each
+is (a) a substantial cross-provider abstraction lift in its own right,
+and (b) anticipates patterns (multimodal voice assistants, video
+analysis pipelines) likely to land on vox before the canonical
+"a consumer is blocked on this" trigger.
+
+- **Audio I/O.** Speech-to-text input, text-to-speech output. Each
+  provider's API is differently shaped — OpenAI exposes audio via the
+  Responses API on the `gpt-4o-audio` family (input + output
+  modalities); Gemini accepts native audio input on 2.x+ via the
+  standard `inline_data` / `file_data` parts, with text-to-speech as a
+  separate TTS surface; Anthropic doesn't yet have a native audio path.
+  Likely shape: an `AudioContent` content-part type parallel to
+  `ImageContent` (raw `bytes` / base64 / URL, with `media_type`); a
+  streaming-audio-out path on `CompletionResponse` or as a new content
+  kind. Surface design is non-trivial; co-design with a real consumer
+  pattern if possible.
+- **Video input.** Gemini natively supports video as a `Part`
+  (`inline_data` with `video/*` MIME, or via uploaded files); OpenAI's
+  Responses API accepts video frames through specific models;
+  Anthropic doesn't have a native video surface. Likely shape: a
+  `VideoContent` content-part type parallel to `ImageContent`, same
+  bytes/base64/URL surface, per-provider routing. Less total surface
+  than audio (input only — no output side), but high per-provider
+  variance.
+
 ## Candidate features — pull in when a consumer needs one
 
 - **Prompt caching control.** `Usage` already *reports* `cache_read_tokens`
