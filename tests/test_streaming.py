@@ -200,6 +200,79 @@ class TestChatCompletionsStreaming:
         chunks = chat_completions_provider._translate_stream_chunk(chunk)
         assert chunks == []
 
+    def test_usage_extracted_from_chunk_with_choices(
+        self, chat_completions_provider: ChatCompletionsProvider
+    ) -> None:
+        """vox#27 — accept ``usage`` from a chunk that also has ``choices``.
+
+        Direct OpenAI sends a final ``choices=[]`` chunk carrying usage,
+        but OpenRouter (and others) include usage on the *same* chunk as
+        the final content / ``finish_reason``. vox now accepts both
+        shapes and emits exactly one ``usage`` chunk in either case,
+        ordered before ``done``.
+        """
+        # Build a chunk that has BOTH content and usage — the OpenRouter shape.
+        chunk = MagicMock()
+        chunk.usage = MagicMock()
+        chunk.usage.prompt_tokens = 100
+        chunk.usage.completion_tokens = 50
+        chunk.usage.total_tokens = 150
+
+        choice = MagicMock()
+        choice.finish_reason = "stop"
+        delta = MagicMock()
+        delta.content = "world"
+        delta.tool_calls = None
+        choice.delta = delta
+        chunk.choices = [choice]
+
+        state: dict = {}
+        chunks = chat_completions_provider._translate_stream_chunk(chunk, state)
+        types = [c.type for c in chunks]
+        # Order must be text → usage → done.
+        assert types == ["text", "usage", "done"], f"unexpected order: {types}"
+        usage_chunk = next(c for c in chunks if c.type == "usage")
+        assert usage_chunk.usage is not None
+        assert usage_chunk.usage.total_tokens == 150
+
+    def test_usage_emitted_only_once_across_chunks(
+        self, chat_completions_provider: ChatCompletionsProvider
+    ) -> None:
+        """Repeated ``usage`` across chunks dedups to a single emission.
+
+        Belt-and-suspenders for providers that report usage on both a
+        content chunk and a trailing choices=[] chunk.
+        """
+        state: dict = {}
+        # First chunk: content + usage (OpenRouter shape).
+        first = MagicMock()
+        first.usage = MagicMock()
+        first.usage.prompt_tokens = 10
+        first.usage.completion_tokens = 5
+        first.usage.total_tokens = 15
+        choice = MagicMock()
+        choice.finish_reason = None
+        delta = MagicMock()
+        delta.content = "hi"
+        delta.tool_calls = None
+        choice.delta = delta
+        first.choices = [choice]
+        chunks_a = chat_completions_provider._translate_stream_chunk(first, state)
+        assert any(c.type == "usage" for c in chunks_a)
+        assert state["usage_emitted"] is True
+
+        # Second chunk: trailing usage-only (direct-OpenAI shape).
+        second = MagicMock()
+        second.usage = MagicMock()
+        second.usage.prompt_tokens = 10
+        second.usage.completion_tokens = 5
+        second.usage.total_tokens = 15
+        second.choices = []
+        chunks_b = chat_completions_provider._translate_stream_chunk(second, state)
+        assert not any(c.type == "usage" for c in chunks_b), (
+            "usage emitted twice despite state guard"
+        )
+
     def test_finish_reason_emitted_only_once_per_stream(
         self, chat_completions_provider: ChatCompletionsProvider
     ) -> None:

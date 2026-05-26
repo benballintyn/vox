@@ -415,13 +415,23 @@ class ChatCompletionsProvider(Provider):
 
         Args:
             chunk: A raw SDK stream chunk.
-            state: Mutable per-stream state. Carries
-                ``current_tool_call_id`` — the id from the first delta of
-                a tool call, replayed on subsequent argument-delta chunks
-                that don't repeat it (vox#20). The Chat Completions SDK
-                sets ``tc.id`` only on the *first* delta for a given
-                tool call; later deltas have ``tc.id is None``, so
-                consumers can't correlate without buffered state.
+            state: Mutable per-stream state. Carries:
+
+                * ``current_tool_call_id`` — id from the first delta of
+                  a tool call, replayed on subsequent argument-delta
+                  chunks that don't repeat it (vox#20). The Chat
+                  Completions SDK sets ``tc.id`` only on the *first*
+                  delta for a given tool call; later deltas have
+                  ``tc.id is None``.
+                * ``usage_emitted`` — dedup guard. Direct OpenAI sends
+                  a final ``choices=[]`` chunk carrying ``usage``;
+                  OpenRouter includes ``usage`` on the *same* chunk as
+                  the final content / ``finish_reason`` (vox#27). We
+                  accept usage from either shape but emit exactly one
+                  ``type="usage"`` StreamChunk.
+                * ``done_emitted`` — dedup guard for repeated
+                  ``finish_reason`` across chunks (some proxied
+                  providers emit it more than once).
 
         Returns:
             List of StreamChunk instances (may be empty).
@@ -430,8 +440,55 @@ class ChatCompletionsProvider(Provider):
             state = {}
         chunks: list[StreamChunk] = []
 
-        # Usage chunk (final, sent after finish_reason on a chunk with no choices)
-        if hasattr(chunk, "usage") and chunk.usage and not chunk.choices:
+        # First: process the chunk's body if it has choices (text,
+        # tool deltas). Usage and done emission happen after, in
+        # the order ``text → usage → done`` so consumers iterating
+        # by type see a coherent sequence.
+        if chunk.choices:
+            choice = chunk.choices[0]
+            delta = choice.delta
+
+            # Tool call deltas. A single chunk may contain BOTH the
+            # function name (first occurrence) and the start of the
+            # arguments — emit both, don't return early after the name.
+            if delta.tool_calls:
+                tc = delta.tool_calls[0]
+                # Buffer the id on first sight; reuse it for subsequent
+                # name-less / id-less argument deltas (vox#20).
+                if tc.id:
+                    state["current_tool_call_id"] = tc.id
+                tool_call_id = state.get("current_tool_call_id", "")
+                if tc.function and tc.function.name:
+                    chunks.append(
+                        StreamChunk(
+                            type="tool_call_start",
+                            tool_call=ToolCallData(
+                                id=tool_call_id,
+                                name=tc.function.name,
+                                arguments={},
+                            ),
+                        )
+                    )
+                if tc.function and tc.function.arguments:
+                    chunks.append(
+                        StreamChunk(
+                            type="tool_call_delta",
+                            tool_call_id=tool_call_id,
+                            arguments_delta=tc.function.arguments,
+                        )
+                    )
+
+            # Text delta
+            if delta.content:
+                chunks.append(StreamChunk(type="text", text=delta.content))
+
+        # Usage — accept from anywhere it appears in the stream.
+        # Direct OpenAI: arrives on a final ``choices=[]`` chunk.
+        # OpenRouter (vox#27): on the same chunk as content / finish.
+        # State dedups so consumers see exactly one ``usage`` chunk
+        # even if the same usage info is repeated.
+        if hasattr(chunk, "usage") and chunk.usage and not state.get("usage_emitted"):
+            state["usage_emitted"] = True
             chunks.append(
                 StreamChunk(
                     type="usage",
@@ -442,62 +499,20 @@ class ChatCompletionsProvider(Provider):
                     ),
                 )
             )
-            return chunks
 
-        if not chunk.choices:
-            return chunks
-
-        choice = chunk.choices[0]
-        delta = choice.delta
-
-        # Tool call deltas. A single chunk may contain BOTH the function name
-        # (first occurrence) and the start of the arguments — we must emit
-        # both events, not return early after the name.
-        if delta.tool_calls:
-            tc = delta.tool_calls[0]
-            # Buffer the id on first sight; reuse it for subsequent
-            # name-less / id-less argument deltas (vox#20).
-            if tc.id:
-                state["current_tool_call_id"] = tc.id
-            tool_call_id = state.get("current_tool_call_id", "")
-            if tc.function and tc.function.name:
+        # Finish reason — dedupped. Some proxied providers (OpenRouter
+        # especially) send ``finish_reason`` on more than one chunk
+        # near end-of-stream; vox emits exactly one terminal ``done``.
+        if chunk.choices:
+            choice = chunk.choices[0]
+            if choice.finish_reason and not state.get("done_emitted"):
+                state["done_emitted"] = True
                 chunks.append(
                     StreamChunk(
-                        type="tool_call_start",
-                        tool_call=ToolCallData(
-                            id=tool_call_id,
-                            name=tc.function.name,
-                            arguments={},
-                        ),
+                        type="done",
+                        finish_reason=normalize_finish_reason(choice.finish_reason),
                     )
                 )
-            if tc.function and tc.function.arguments:
-                chunks.append(
-                    StreamChunk(
-                        type="tool_call_delta",
-                        tool_call_id=tool_call_id,
-                        arguments_delta=tc.function.arguments,
-                    )
-                )
-
-        # Text delta
-        if delta.content:
-            chunks.append(StreamChunk(type="text", text=delta.content))
-
-        # Finish reason (emitted last for this chunk if present). Some
-        # providers proxied through this path (OpenRouter especially)
-        # send ``finish_reason`` on more than one stream chunk near the
-        # end of the response, which previously produced multiple
-        # ``done`` chunks back-to-back. Dedup via per-stream state —
-        # only the first ``finish_reason`` we see becomes a ``done``.
-        if choice.finish_reason and not state.get("done_emitted"):
-            state["done_emitted"] = True
-            chunks.append(
-                StreamChunk(
-                    type="done",
-                    finish_reason=normalize_finish_reason(choice.finish_reason),
-                )
-            )
 
         return chunks
 
