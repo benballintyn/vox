@@ -11,6 +11,9 @@ PROVIDER_PREFIXES: list[tuple[str, str]] = [
     ("o1", "openai"),
     ("o3", "openai"),
     ("o4", "openai"),
+    # OpenAI audio models — don't share the "gpt-" prefix.
+    ("whisper-", "openai"),
+    ("tts-", "openai"),
     ("claude-", "anthropic"),
     ("gemini-", "gemini"),
 ]
