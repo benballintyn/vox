@@ -4,15 +4,19 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Iterator, Sequence
-from typing import Any
+from typing import Any, NoReturn
 
 from pydantic import BaseModel
 
 from ..models.config import ProviderConfig
-from ..models.messages import Message
+from ..models.messages import AudioContent, Message
 from ..models.reasoning import ReasoningConfig
-from ..models.responses import CompletionResponse, StreamChunk
+from ..models.responses import CompletionResponse, StreamChunk, TranscriptionResponse
 from ..models.tools import ToolSpec
+
+# Names of providers that ship native audio support. Referenced in the
+# default-unsupported error message so consumers know where to route.
+_AUDIO_SUPPORTED_PROVIDERS = ("openai", "gemini")
 
 
 class Provider(ABC):
@@ -191,3 +195,118 @@ class Provider(ABC):
     def provider_name(self) -> str:
         """Return the canonical name of this provider (e.g. 'openai', 'anthropic')."""
         ...
+
+    # ── Audio methods ──────────────────────────────────────────────────
+    # Not abstract. Subclasses with native audio support (OpenAI, Gemini)
+    # override these. Everyone else inherits the default which raises a
+    # uniform InvalidRequestError pointing at the providers that do
+    # support audio.
+
+    def transcribe(
+        self,
+        audio: AudioContent,
+        *,
+        model: str | None = None,
+        language: str | None = None,
+        prompt: str | None = None,
+        **kwargs: Any,
+    ) -> TranscriptionResponse:
+        """Synchronously transcribe audio to text.
+
+        Default behavior: raise :class:`InvalidRequestError`. Providers
+        with native STT (OpenAI Whisper, Gemini) override.
+
+        Args:
+            audio: The audio to transcribe.
+            model: STT model identifier (e.g. ``"whisper-1"``,
+                ``"gpt-4o-transcribe"``, ``"gemini-3.5-flash"``).
+            language: Optional ISO-639-1 language code to bias the
+                model. OpenAI Whisper uses this; Gemini ignores it.
+            prompt: Optional context string the STT model uses to bias
+                its output (proper nouns, domain vocab). OpenAI
+                Whisper only.
+            **kwargs: Provider-specific passthrough.
+
+        Returns:
+            A :class:`TranscriptionResponse`.
+
+        Raises:
+            InvalidRequestError: When the provider has no native STT.
+        """
+        self._raise_audio_unsupported("transcribe")
+
+    async def atranscribe(
+        self,
+        audio: AudioContent,
+        *,
+        model: str | None = None,
+        language: str | None = None,
+        prompt: str | None = None,
+        **kwargs: Any,
+    ) -> TranscriptionResponse:
+        """Asynchronously transcribe audio to text. See :meth:`transcribe`."""
+        self._raise_audio_unsupported("transcribe")
+
+    def synthesize(
+        self,
+        text: str,
+        *,
+        voice: str,
+        model: str | None = None,
+        format: str | None = None,
+        speed: float | None = None,
+        instructions: str | None = None,
+        **kwargs: Any,
+    ) -> AudioContent:
+        """Synchronously synthesize text to speech.
+
+        Default behavior: raise :class:`InvalidRequestError`. Providers
+        with native TTS (OpenAI, Gemini) override.
+
+        Args:
+            text: The text to speak.
+            voice: Voice name. Provider-specific values; see
+                ``OPENAI_TTS_VOICES`` / ``GEMINI_TTS_VOICES``.
+            model: TTS model identifier (e.g. ``"tts-1"``,
+                ``"gpt-4o-mini-tts"``, ``"gemini-3.1-flash-tts-preview"``).
+            format: Output audio format. OpenAI: ``"mp3"`` (default) /
+                ``"opus"`` / ``"aac"`` / ``"flac"`` / ``"wav"`` /
+                ``"pcm"``. Gemini always emits 24 kHz mono PCM
+                (wrapped as WAV by vox); the parameter is ignored.
+            speed: Playback speed multiplier (0.25-4.0). OpenAI only.
+            instructions: Voice-direction prompt (e.g. "Speak in a
+                cheerful tone"). Only ``gpt-4o-mini-tts`` and newer.
+            **kwargs: Provider-specific passthrough.
+
+        Returns:
+            An :class:`AudioContent` containing the synthesized audio.
+
+        Raises:
+            InvalidRequestError: When the provider has no native TTS.
+        """
+        self._raise_audio_unsupported("synthesize")
+
+    async def asynthesize(
+        self,
+        text: str,
+        *,
+        voice: str,
+        model: str | None = None,
+        format: str | None = None,
+        speed: float | None = None,
+        instructions: str | None = None,
+        **kwargs: Any,
+    ) -> AudioContent:
+        """Asynchronously synthesize text to speech. See :meth:`synthesize`."""
+        self._raise_audio_unsupported("synthesize")
+
+    def _raise_audio_unsupported(self, method: str) -> NoReturn:
+        """Uniform error path for audio methods on providers without native support."""
+        from ..errors import InvalidRequestError
+
+        supported = ", ".join(_AUDIO_SUPPORTED_PROVIDERS)
+        raise InvalidRequestError(
+            f"{method!s}() is not supported on provider {self.provider_name!r}. "
+            f"Providers with native audio support: {supported}.",
+            provider=self.provider_name,
+        )

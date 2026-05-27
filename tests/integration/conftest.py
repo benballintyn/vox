@@ -54,6 +54,12 @@ class ProviderProfile:
     exposes_thinking_blocks: bool = False
     bad_model_id: str = ""
     requires_disable_reasoning_for_length: bool = False
+    # Audio: per-provider STT/TTS model + voice. ``None``/empty marks
+    # the provider as not supporting that side; the audio_profile
+    # fixture filters accordingly.
+    stt_model: str | None = None
+    tts_model: str | None = None
+    tts_voice: str = ""
 
 
 # Profiles in stable order. Add a new provider by appending an entry.
@@ -65,6 +71,9 @@ PROFILES: list[ProviderProfile] = [
         exposes_thinking_blocks=False,
         bad_model_id="gpt-bogus-9999-does-not-exist",
         requires_disable_reasoning_for_length=True,
+        stt_model="whisper-1",
+        tts_model="tts-1",
+        tts_voice="alloy",
     ),
     ProviderProfile(
         name="anthropic",
@@ -80,6 +89,9 @@ PROFILES: list[ProviderProfile] = [
         exposes_thinking_blocks=False,
         bad_model_id="gemini-bogus-9999-does-not-exist",
         supports_native_video=True,
+        stt_model="gemini-3.5-flash",
+        tts_model="gemini-3.1-flash-tts-preview",
+        tts_voice="Kore",
     ),
     ProviderProfile(
         name="openrouter",
@@ -162,6 +174,24 @@ def reasoning_profile(request: pytest.FixtureRequest) -> ProviderProfile:
 )
 def video_profile(request: pytest.FixtureRequest) -> ProviderProfile:
     """Like ``profile``, but limited to providers with native video input."""
+    return _require_key(request.param)
+
+
+@pytest.fixture(
+    params=[p for p in PROFILES if p.stt_model],
+    ids=lambda p: p.name,
+)
+def stt_profile(request: pytest.FixtureRequest) -> ProviderProfile:
+    """Profiles that support speech-to-text natively."""
+    return _require_key(request.param)
+
+
+@pytest.fixture(
+    params=[p for p in PROFILES if p.tts_model],
+    ids=lambda p: p.name,
+)
+def tts_profile(request: pytest.FixtureRequest) -> ProviderProfile:
+    """Profiles that support text-to-speech natively."""
     return _require_key(request.param)
 
 

@@ -1,6 +1,6 @@
 """Tests for the Gemini provider."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -378,3 +378,185 @@ class TestReasoningTranslation:
         result = provider._build_thinking_config(ReasoningConfig(), model="gemini-2.5-pro")
         assert result is None
         types_mock.ThinkingConfig.assert_not_called()
+
+
+class TestGeminiTranscribe:
+    """Tests for Gemini provider's transcribe() / atranscribe()."""
+
+    def test_sync_transcribe_builds_contents_and_maps_response(
+        self, provider: GeminiProvider
+    ) -> None:
+        """Sends audio + transcribe prompt via generate_content, extracts text."""
+        from vox import AudioContent
+
+        with (
+            patch("vox.providers.gemini._import_genai_types") as mock_types,
+            patch.object(provider, "_get_client") as mock_get_client,
+        ):
+            types_mock = MagicMock()
+            mock_types.return_value = types_mock
+
+            # Build a fake generate_content response with one text part.
+            text_part = MagicMock()
+            text_part.text = "this is the transcript"
+            content = MagicMock()
+            content.parts = [text_part]
+            candidate = MagicMock()
+            candidate.content = content
+            resp = MagicMock()
+            resp.candidates = [candidate]
+            resp.usage_metadata = None  # no usage info path
+
+            client = MagicMock()
+            client.models.generate_content = MagicMock(return_value=resp)
+            mock_get_client.return_value = client
+
+            result = provider.transcribe(
+                AudioContent(data="ZmFrZQ==", media_type="audio/mp3"),
+                model="gemini-3.5-flash",
+            )
+
+            # Response mapped onto TranscriptionResponse.
+            assert result.text == "this is the transcript"
+            assert result.provider == "gemini"
+            assert result.model == "gemini-3.5-flash"
+
+            # generate_content was called with the right model.
+            kwargs = client.models.generate_content.call_args.kwargs
+            assert kwargs["model"] == "gemini-3.5-flash"
+            # The contents list contains the audio Part + the transcribe prompt.
+            assert "contents" in kwargs
+
+    async def test_async_transcribe_parity(self, provider: GeminiProvider) -> None:
+        from vox import AudioContent
+
+        with (
+            patch("vox.providers.gemini._import_genai_types") as mock_types,
+            patch.object(provider, "_get_client") as mock_get_client,
+        ):
+            mock_types.return_value = MagicMock()
+
+            text_part = MagicMock()
+            text_part.text = "async transcript"
+            content = MagicMock()
+            content.parts = [text_part]
+            candidate = MagicMock()
+            candidate.content = content
+            resp = MagicMock()
+            resp.candidates = [candidate]
+            resp.usage_metadata = None
+
+            client = MagicMock()
+            client.aio.models.generate_content = AsyncMock(return_value=resp)
+            mock_get_client.return_value = client
+
+            result = await provider.atranscribe(
+                AudioContent(data="ZmFrZQ=="),
+                model="gemini-3.5-flash",
+            )
+            assert result.text == "async transcript"
+
+
+class TestGeminiSynthesize:
+    """Tests for Gemini provider's synthesize() / asynthesize()."""
+
+    def test_sync_synthesize_wraps_pcm_as_wav(self, provider: GeminiProvider) -> None:
+        """Gemini returns raw PCM; provider must wrap as WAV."""
+        with (
+            patch("vox.providers.gemini._import_genai_types") as mock_types,
+            patch.object(provider, "_get_client") as mock_get_client,
+        ):
+            mock_types.return_value = MagicMock()
+
+            # Synthesize the smallest plausible PCM blob.
+            pcm_bytes = b"\x00\x00" * 100  # 100 silent 16-bit samples
+            inline = MagicMock()
+            inline.data = pcm_bytes
+            part = MagicMock()
+            part.inline_data = inline
+            content = MagicMock()
+            content.parts = [part]
+            candidate = MagicMock()
+            candidate.content = content
+            resp = MagicMock()
+            resp.candidates = [candidate]
+
+            client = MagicMock()
+            client.models.generate_content = MagicMock(return_value=resp)
+            mock_get_client.return_value = client
+
+            result = provider.synthesize(
+                "Hello",
+                voice="Kore",
+                model="gemini-3.1-flash-tts-preview",
+            )
+
+            from vox import AudioContent
+
+            assert isinstance(result, AudioContent)
+            assert result.media_type == "audio/wav"
+            # The data field is base64-encoded WAV — decode and check
+            # for the RIFF/WAVE header that proves PCM was wrapped.
+            import base64
+
+            decoded = base64.standard_b64decode(result.data)
+            assert decoded.startswith(b"RIFF")
+            assert b"WAVE" in decoded[:12]
+
+    def test_sync_synthesize_raises_when_no_audio_in_response(
+        self, provider: GeminiProvider
+    ) -> None:
+        """Defensive: Gemini returned candidates but no inline_data."""
+        from vox.errors import InvalidRequestError
+
+        with (
+            patch("vox.providers.gemini._import_genai_types") as mock_types,
+            patch.object(provider, "_get_client") as mock_get_client,
+        ):
+            mock_types.return_value = MagicMock()
+
+            part = MagicMock()
+            part.inline_data = None
+            content = MagicMock()
+            content.parts = [part]
+            candidate = MagicMock()
+            candidate.content = content
+            resp = MagicMock()
+            resp.candidates = [candidate]
+
+            client = MagicMock()
+            client.models.generate_content = MagicMock(return_value=resp)
+            mock_get_client.return_value = client
+
+            with pytest.raises(InvalidRequestError, match="no inline_data audio part"):
+                provider.synthesize("hi", voice="Kore", model="gemini-3.1-flash-tts-preview")
+
+    async def test_async_synthesize_parity(self, provider: GeminiProvider) -> None:
+        with (
+            patch("vox.providers.gemini._import_genai_types") as mock_types,
+            patch.object(provider, "_get_client") as mock_get_client,
+        ):
+            mock_types.return_value = MagicMock()
+
+            pcm_bytes = b"\x00\x00" * 50
+            inline = MagicMock()
+            inline.data = pcm_bytes
+            part = MagicMock()
+            part.inline_data = inline
+            content = MagicMock()
+            content.parts = [part]
+            candidate = MagicMock()
+            candidate.content = content
+            resp = MagicMock()
+            resp.candidates = [candidate]
+
+            client = MagicMock()
+            client.aio.models.generate_content = AsyncMock(return_value=resp)
+            mock_get_client.return_value = client
+
+            result = await provider.asynthesize(
+                "Hi", voice="Kore", model="gemini-3.1-flash-tts-preview"
+            )
+            from vox import AudioContent
+
+            assert isinstance(result, AudioContent)

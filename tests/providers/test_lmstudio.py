@@ -39,3 +39,20 @@ class TestLMStudioProvider:
 
     def test_default_model(self) -> None:
         assert LMStudioProvider._default_model == "local-model"
+
+
+class TestAudioUnsupported:
+    """LM Studio doesn't expose /v1/audio/* on the chat completions surface."""
+
+    def test_transcribe_raises(self, provider: LMStudioProvider) -> None:
+        from vox import AudioContent
+        from vox.errors import InvalidRequestError
+
+        with pytest.raises(InvalidRequestError, match="not supported on provider 'lmstudio'"):
+            provider.transcribe(AudioContent(data="ZmFrZQ=="))
+
+    def test_synthesize_raises(self, provider: LMStudioProvider) -> None:
+        from vox.errors import InvalidRequestError
+
+        with pytest.raises(InvalidRequestError):
+            provider.synthesize("hi", voice="alloy")

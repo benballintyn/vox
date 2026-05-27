@@ -293,3 +293,33 @@ class TestVideoFallback:
         assert len(text_parts) == 1
         assert len(image_parts) == 2
         assert image_parts[0]["source"]["media_type"] == "image/jpeg"
+
+
+class TestAudioUnsupported:
+    """Anthropic has no native STT/TTS; both methods must raise."""
+
+    def test_transcribe_raises(self, provider: AnthropicProvider) -> None:
+        from vox import AudioContent
+        from vox.errors import InvalidRequestError
+
+        with pytest.raises(InvalidRequestError, match="not supported on provider 'anthropic'"):
+            provider.transcribe(AudioContent(data="ZmFrZQ=="))
+
+    def test_synthesize_raises(self, provider: AnthropicProvider) -> None:
+        from vox.errors import InvalidRequestError
+
+        with pytest.raises(InvalidRequestError, match="not supported on provider 'anthropic'"):
+            provider.synthesize("hi", voice="alloy")
+
+    async def test_atranscribe_raises(self, provider: AnthropicProvider) -> None:
+        from vox import AudioContent
+        from vox.errors import InvalidRequestError
+
+        with pytest.raises(InvalidRequestError):
+            await provider.atranscribe(AudioContent(data="ZmFrZQ=="))
+
+    async def test_asynthesize_raises(self, provider: AnthropicProvider) -> None:
+        from vox.errors import InvalidRequestError
+
+        with pytest.raises(InvalidRequestError):
+            await provider.asynthesize("hi", voice="alloy")

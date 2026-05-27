@@ -125,6 +125,36 @@ class CompletionResponse(BaseModel):
     response_id: str | None = None
 
 
+class TranscriptionResponse(BaseModel):
+    """Result of a :meth:`VoxClient.transcribe` call.
+
+    Args:
+        text: The transcribed text. Always populated.
+        language: ISO-639-1 language code, if the provider reports it.
+            OpenAI Whisper returns this when
+            ``response_format="verbose_json"`` (vox always requests
+            verbose). Gemini's transcribe-via-prompt path does not
+            report this — populated only when the model emits a
+            recognizable language hint.
+        duration: Audio duration in seconds, if the provider reports it.
+            OpenAI Whisper does; Gemini does not.
+        provider: Provider name that produced this transcription.
+        model: Model identifier used (e.g. ``"whisper-1"``,
+            ``"gemini-3.5-flash"``).
+        usage: Token usage, when the provider reports it. OpenAI
+            Whisper is priced per audio second (no token surface), so
+            ``usage`` is ``None``. Gemini reports input audio tokens +
+            output text tokens via the standard ``Usage`` shape.
+    """
+
+    text: str
+    language: str | None = None
+    duration: float | None = None
+    provider: str
+    model: str
+    usage: Usage | None = None
+
+
 class StreamChunk(BaseModel):
     """A single chunk from a streaming response.
 

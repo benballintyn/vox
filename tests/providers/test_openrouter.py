@@ -85,3 +85,20 @@ class TestVideoFallback:
         assert len(text_parts) == 1
         assert len(image_parts) == 1
         assert image_parts[0]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+
+
+class TestAudioUnsupported:
+    """OpenRouter doesn't route /v1/audio/* endpoints; transcribe/synthesize raise."""
+
+    def test_transcribe_raises(self, provider: OpenRouterProvider) -> None:
+        from vox import AudioContent
+        from vox.errors import InvalidRequestError
+
+        with pytest.raises(InvalidRequestError, match="not supported on provider 'openrouter'"):
+            provider.transcribe(AudioContent(data="ZmFrZQ=="))
+
+    def test_synthesize_raises(self, provider: OpenRouterProvider) -> None:
+        from vox.errors import InvalidRequestError
+
+        with pytest.raises(InvalidRequestError):
+            provider.synthesize("hi", voice="alloy")

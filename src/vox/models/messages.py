@@ -113,6 +113,60 @@ class VideoContent(BaseModel):
         return v
 
 
+class AudioContent(BaseModel):
+    """Audio content for the dedicated ``transcribe`` / ``synthesize`` paths.
+
+    Unlike :class:`ImageContent` and :class:`VideoContent`, ``AudioContent``
+    is **not** part of the :data:`ContentPart` union used in
+    :class:`Message.content`. Audio doesn't fit naturally into the
+    general ``complete()`` flow — the flagship reasoning models
+    (Claude Opus / Sonnet, GPT-5, Gemini 3 Pro) don't accept audio
+    input natively; only audio-tuned models like ``gpt-audio-1.5`` or
+    ``gemini-3.5-flash`` do. vox exposes audio via dedicated
+    :meth:`VoxClient.transcribe` and :meth:`VoxClient.synthesize`
+    methods instead — see the README "Audio I/O" section. ``AudioContent``
+    is the typed data container used as input/output of those methods.
+
+    Args:
+        type: Content-part discriminator. Always ``"audio"``.
+        source_type: ``"base64"`` (default — ``data`` is a base64 string
+            or raw audio ``bytes``, auto-encoded) or ``"url"``
+            (``data`` is a URL / provider file URI; only supported by
+            providers that fetch URI audio themselves, e.g. Gemini
+            Files API URIs).
+        media_type: MIME type. OpenAI Whisper accepts ``audio/mp3``,
+            ``audio/wav``, ``audio/mp4``, ``audio/mpeg``, ``audio/m4a``,
+            ``audio/webm`` (plus ``audio/flac``, ``audio/ogg``,
+            ``audio/oga``). Gemini accepts ``audio/wav``, ``audio/mp3``,
+            ``audio/aiff``, ``audio/aac``, ``audio/ogg``, ``audio/flac``.
+            Output from :meth:`VoxClient.synthesize` carries the
+            requested format (e.g. ``audio/mp3`` for OpenAI ``tts-1``,
+            ``audio/wav`` for Gemini after PCM→WAV wrapping).
+        data: For ``source_type="base64"``, either a base64 ASCII
+            string OR raw ``bytes`` — raw bytes are auto-encoded. For
+            ``source_type="url"``, the URL string. Always stored
+            internally as ``str``.
+    """
+
+    type: Literal["audio"] = "audio"
+    source_type: Literal["base64", "url"] = "base64"
+    media_type: str = "audio/mp3"
+    data: str
+
+    @field_validator("data", mode="before")
+    @classmethod
+    def _bytes_to_base64(cls, v: Any) -> Any:
+        """Auto-encode raw audio bytes to a base64 ASCII string.
+
+        Mirrors :meth:`ImageContent._bytes_to_base64` — callers commonly
+        hold raw bytes from ``Path.read_bytes()`` and would otherwise
+        need to base64-encode at every call site.
+        """
+        if isinstance(v, (bytes, bytearray)):
+            return base64.standard_b64encode(bytes(v)).decode("ascii")
+        return v
+
+
 ContentPart = TextContent | ImageContent | VideoContent
 
 

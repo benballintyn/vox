@@ -32,6 +32,16 @@ class TestProviderRegistry:
         assert resolve_provider("gemini-2.0-flash") == "gemini"
         assert resolve_provider("gemini-3.0-pro") == "gemini"
 
+    def test_openai_audio_models(self) -> None:
+        """Whisper + TTS models route to OpenAI without an explicit provider."""
+        assert resolve_provider("whisper-1") == "openai"
+        assert resolve_provider("tts-1") == "openai"
+        assert resolve_provider("tts-1-hd") == "openai"
+        # gpt-prefixed audio models are covered by the gpt- prefix.
+        assert resolve_provider("gpt-4o-transcribe") == "openai"
+        assert resolve_provider("gpt-4o-mini-transcribe") == "openai"
+        assert resolve_provider("gpt-4o-mini-tts") == "openai"
+
     def test_explicit_provider_override(self) -> None:
         assert resolve_provider("anything", "openrouter") == "openrouter"
         assert resolve_provider("gpt-4o", "lmstudio") == "lmstudio"
