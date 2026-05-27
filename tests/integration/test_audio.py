@@ -48,9 +48,14 @@ def _assert_transcript_matches(text: str) -> None:
     assert matched, f"transcript missed every expected word; got: {text!r}"
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 def known_phrase_wav(client: VoxClient) -> AudioContent:
-    """A WAV of OpenAI TTS speaking ``KNOWN_PHRASE``. Session-cached.
+    """A WAV of OpenAI TTS speaking ``KNOWN_PHRASE``.
+
+    Function-scoped (the ``client`` dep is function-scoped — pytest
+    forbids broader scopes from depending on narrower ones). Each
+    test gets a freshly-synthesized clip; cost is ~$0.0002 per test,
+    negligible vs. the integration suite's broader budget.
 
     Skipped if ``OPENAI_API_KEY`` is missing — every transcribe test
     that depends on this fixture inherits the skip.
