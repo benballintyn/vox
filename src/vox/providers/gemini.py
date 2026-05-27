@@ -5,7 +5,14 @@ from __future__ import annotations
 import os
 import uuid
 from collections.abc import AsyncIterator, Iterator, Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    # Used only in annotations; not imported at runtime to avoid the
+    # PostToolUse formatter stripping them as "unused" between Edits.
+    # Runtime code uses local imports inside each audio function.
+    from ..models.messages import AudioContent
+    from ..models.responses import TranscriptionResponse
 
 from pydantic import BaseModel
 
@@ -23,7 +30,13 @@ from ..errors import (
     RateLimitError,
 )
 from ..models.config import ProviderConfig
-from ..models.messages import ImageContent, Message, TextContent, ToolCallData, VideoContent
+from ..models.messages import (
+    ImageContent,
+    Message,
+    TextContent,
+    ToolCallData,
+    VideoContent,
+)
 from ..models.reasoning import (
     LEVEL_TO_BUDGET_TOKENS,
     LEVEL_TO_GEMINI3_LEVEL,
@@ -825,3 +838,284 @@ class GeminiProvider(Provider):
             if isinstance(e, VoxError):
                 raise
             self._handle_error(e)
+
+    # ── Audio: transcribe + synthesize ────────────────────────────────
+
+    def transcribe(
+        self,
+        audio: AudioContent,
+        *,
+        model: str | None = None,
+        language: str | None = None,
+        prompt: str | None = None,
+        **kwargs: Any,
+    ) -> TranscriptionResponse:
+        """Transcribe audio via Gemini's ``generate_content`` with an audio Part.
+
+        Gemini has no dedicated STT endpoint; transcription is done by
+        prompting an audio-capable model (``gemini-3.5-flash`` and up)
+        with the audio + a "transcribe this" instruction. The
+        ``language`` parameter is silently ignored — Gemini does not
+        accept a language hint on the standard generate_content call;
+        for that, embed it in ``prompt``.
+        """
+        from ..models.messages import AudioContent  # noqa: F401  -- runtime import
+
+        return _gemini_transcribe_sync(self, audio, model, prompt, **kwargs)
+
+    async def atranscribe(
+        self,
+        audio: AudioContent,
+        *,
+        model: str | None = None,
+        language: str | None = None,
+        prompt: str | None = None,
+        **kwargs: Any,
+    ) -> TranscriptionResponse:
+        from ..models.messages import AudioContent  # noqa: F401
+
+        return await _gemini_transcribe_async(self, audio, model, prompt, **kwargs)
+
+    def synthesize(
+        self,
+        text: str,
+        *,
+        voice: str,
+        model: str | None = None,
+        format: str | None = None,
+        speed: float | None = None,
+        instructions: str | None = None,
+        **kwargs: Any,
+    ) -> AudioContent:
+        """Synthesize speech via Gemini ``generate_content`` with audio modality.
+
+        Uses a TTS model (e.g. ``gemini-3.1-flash-tts-preview``) with
+        ``response_modalities=["AUDIO"]`` and a prebuilt voice config.
+        Returns 24 kHz mono PCM wrapped as WAV for downstream
+        compatibility. ``format``, ``speed``, and ``instructions``
+        are silently ignored — Gemini TTS doesn't expose them on the
+        single-call generate_content path.
+        """
+        return _gemini_synthesize_sync(self, text, voice, model, **kwargs)
+
+    async def asynthesize(
+        self,
+        text: str,
+        *,
+        voice: str,
+        model: str | None = None,
+        format: str | None = None,
+        speed: float | None = None,
+        instructions: str | None = None,
+        **kwargs: Any,
+    ) -> AudioContent:
+        return await _gemini_synthesize_async(self, text, voice, model, **kwargs)
+
+
+# ── Gemini audio helpers ───────────────────────────────────────────────
+
+# Prompt used to coax Gemini into pure-transcription output. Plain
+# enough that the model returns the transcript without preamble or
+# commentary. Exposed as a constant so consumers can override via the
+# ``prompt`` arg if needed.
+_DEFAULT_TRANSCRIBE_PROMPT = (
+    "Transcribe the audio above verbatim. Return only the transcribed "
+    "text — no preamble, no quotation marks, no commentary."
+)
+
+# Default voice / model when a caller omits them on synthesize().
+GEMINI_TTS_VOICES: tuple[str, ...] = (
+    "Aoede",
+    "Charon",
+    "Fenrir",
+    "Kore",
+    "Leda",
+    "Orus",
+    "Puck",
+    "Zephyr",
+)
+
+
+def _audio_part_for(audio: Any) -> Any:
+    """Build a Gemini Part wrapping an AudioContent for upload.
+
+    Mirrors the image/video helper in :meth:`GeminiProvider._translate_parts`:
+    URL → file_data, base64 → inline_data.
+    """
+    import base64
+
+    types = _import_genai_types()
+    if audio.source_type == "url":
+        return types.Part(
+            file_data=types.FileData(file_uri=audio.data, mime_type=audio.media_type)
+        )
+    return types.Part(
+        inline_data=types.Blob(
+            mime_type=audio.media_type,
+            data=base64.b64decode(audio.data),
+        )
+    )
+
+
+def _build_transcribe_contents(audio: Any, prompt: str | None) -> list[Any]:
+    """Build the contents list for a Gemini transcribe call."""
+    types = _import_genai_types()
+    return [
+        types.Content(
+            role="user",
+            parts=[
+                _audio_part_for(audio),
+                types.Part(text=prompt or _DEFAULT_TRANSCRIBE_PROMPT),
+            ],
+        )
+    ]
+
+
+def _transcription_from_gemini(resp: Any, model: str) -> Any:
+    """Map a Gemini generate_content response onto a TranscriptionResponse."""
+    from ..models.responses import TranscriptionResponse, Usage
+
+    text = ""
+    candidates = getattr(resp, "candidates", None) or []
+    if candidates:
+        parts = getattr(getattr(candidates[0], "content", None), "parts", None) or []
+        text_parts = [getattr(p, "text", "") for p in parts if getattr(p, "text", None)]
+        text = "".join(text_parts).strip()
+
+    meta = getattr(resp, "usage_metadata", None)
+    usage = None
+    if meta is not None:
+        usage = Usage(
+            prompt_tokens=getattr(meta, "prompt_token_count", 0) or 0,
+            completion_tokens=getattr(meta, "candidates_token_count", 0) or 0,
+            total_tokens=getattr(meta, "total_token_count", 0) or 0,
+            model=model,
+        )
+    return TranscriptionResponse(
+        text=text,
+        provider="gemini",
+        model=model,
+        usage=usage,
+    )
+
+
+def _gemini_transcribe_sync(
+    provider: Any, audio: Any, model: str | None, prompt: str | None, **kwargs: Any
+) -> Any:
+    resolved = provider._resolve_model(model)
+    contents = _build_transcribe_contents(audio, prompt)
+    try:
+        resp = provider._get_client().models.generate_content(
+            model=resolved, contents=contents, **kwargs
+        )
+    except Exception as e:
+        from ..errors import VoxError
+
+        if isinstance(e, VoxError):
+            raise
+        provider._handle_error(e)
+    return _transcription_from_gemini(resp, resolved)
+
+
+async def _gemini_transcribe_async(
+    provider: Any, audio: Any, model: str | None, prompt: str | None, **kwargs: Any
+) -> Any:
+    resolved = provider._resolve_model(model)
+    contents = _build_transcribe_contents(audio, prompt)
+    try:
+        resp = await provider._get_client().aio.models.generate_content(
+            model=resolved, contents=contents, **kwargs
+        )
+    except Exception as e:
+        from ..errors import VoxError
+
+        if isinstance(e, VoxError):
+            raise
+        provider._handle_error(e)
+    return _transcription_from_gemini(resp, resolved)
+
+
+def _build_synthesize_config(voice: str) -> Any:
+    """Build a GenerateContentConfig requesting a single-speaker audio response."""
+    types = _import_genai_types()
+    return types.GenerateContentConfig(
+        response_modalities=["AUDIO"],
+        speech_config=types.SpeechConfig(
+            voice_config=types.VoiceConfig(
+                prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice)
+            )
+        ),
+    )
+
+
+def _audio_from_gemini(resp: Any) -> Any:
+    """Extract the PCM blob from a Gemini TTS response and wrap as WAV."""
+    import io
+    import wave
+
+    from ..models.messages import AudioContent
+
+    candidates = getattr(resp, "candidates", None) or []
+    if not candidates:
+        raise InvalidRequestError("Gemini TTS returned no candidates.", provider="gemini")
+    parts = getattr(getattr(candidates[0], "content", None), "parts", None) or []
+    pcm: bytes | None = None
+    for part in parts:
+        inline = getattr(part, "inline_data", None)
+        if inline is not None and getattr(inline, "data", None):
+            pcm = inline.data
+            break
+    if pcm is None:
+        raise InvalidRequestError(
+            "Gemini TTS response had no inline_data audio part.", provider="gemini"
+        )
+
+    # Wrap raw 24 kHz mono 16-bit PCM as WAV so downstream code gets a
+    # standard, playable file rather than headerless PCM.
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(24000)
+        wf.writeframes(pcm)
+    return AudioContent(
+        source_type="base64",
+        media_type="audio/wav",
+        data=buf.getvalue(),  # type: ignore[arg-type]
+    )
+
+
+def _gemini_synthesize_sync(
+    provider: Any, text: str, voice: str, model: str | None, **kwargs: Any
+) -> Any:
+    resolved = provider._resolve_model(model)
+    config = _build_synthesize_config(voice)
+    try:
+        resp = provider._get_client().models.generate_content(
+            model=resolved, contents=text, config=config, **kwargs
+        )
+    except Exception as e:
+        from ..errors import VoxError
+
+        if isinstance(e, VoxError):
+            raise
+        provider._handle_error(e)
+    return _audio_from_gemini(resp)
+
+
+async def _gemini_synthesize_async(
+    provider: Any, text: str, voice: str, model: str | None, **kwargs: Any
+) -> Any:
+    resolved = provider._resolve_model(model)
+    config = _build_synthesize_config(voice)
+    try:
+        resp = await provider._get_client().aio.models.generate_content(
+            model=resolved, contents=text, config=config, **kwargs
+        )
+    except Exception as e:
+        from ..errors import VoxError
+
+        if isinstance(e, VoxError):
+            raise
+        provider._handle_error(e)
+    return _audio_from_gemini(resp)

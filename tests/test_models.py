@@ -170,6 +170,71 @@ class TestVideoContent:
         assert video.data == url
 
 
+class TestAudioContent:
+    """Tests for AudioContent's defaults + bytes-friendly data accessor."""
+
+    def test_default_media_type_is_mp3(self) -> None:
+        from vox import AudioContent
+
+        audio = AudioContent(data="ZmFrZQ==")
+        assert audio.type == "audio"
+        assert audio.source_type == "base64"
+        assert audio.media_type == "audio/mp3"
+
+    def test_data_accepts_raw_bytes_and_base64_encodes(self) -> None:
+        """Mirrors ImageContent/VideoContent ergonomics for audio bytes."""
+        import base64
+
+        from vox import AudioContent
+
+        raw = b"RIFF\x00\x00\x00\x00WAVEfake"
+        audio = AudioContent(data=raw, media_type="audio/wav")  # type: ignore[arg-type]
+        assert isinstance(audio.data, str)
+        assert audio.data == base64.standard_b64encode(raw).decode("ascii")
+
+    def test_data_string_passes_through(self) -> None:
+        from vox import AudioContent
+
+        already_b64 = "UklGRgAAAABXQVZF"
+        audio = AudioContent(data=already_b64, media_type="audio/wav")
+        assert audio.data == already_b64
+
+    def test_data_url_string_passes_through(self) -> None:
+        from vox import AudioContent
+
+        url = "https://storage.googleapis.com/example/clip.wav"
+        audio = AudioContent(source_type="url", data=url, media_type="audio/wav")
+        assert audio.data == url
+
+
+class TestTranscriptionResponse:
+    """Smoke tests for the TranscriptionResponse model defaults."""
+
+    def test_minimal_construction(self) -> None:
+        from vox import TranscriptionResponse
+
+        r = TranscriptionResponse(text="hello", provider="openai", model="whisper-1")
+        assert r.text == "hello"
+        assert r.language is None
+        assert r.duration is None
+        assert r.usage is None
+
+    def test_with_optional_fields(self) -> None:
+        from vox import TranscriptionResponse, Usage
+
+        r = TranscriptionResponse(
+            text="hello",
+            language="en",
+            duration=1.2,
+            provider="openai",
+            model="whisper-1",
+            usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+        )
+        assert r.language == "en"
+        assert r.duration == 1.2
+        assert r.usage is not None
+
+
 class TestTool:
     """Tests for Tool, ToolCall, and ToolResult models."""
 

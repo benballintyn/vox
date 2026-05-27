@@ -539,3 +539,183 @@ class TestVideoFallback:
         assert len(text_parts) == 1
         assert len(image_parts) == 2
         assert image_parts[0]["image_url"].startswith("data:image/jpeg;base64,")
+
+
+class TestOpenAITranscribe:
+    """Tests for OpenAI provider's transcribe() / atranscribe()."""
+
+    def test_sync_transcribe_builds_request_and_maps_response(
+        self, provider: OpenAIProvider
+    ) -> None:
+        from vox import AudioContent
+
+        mock_resp = MagicMock()
+        mock_resp.text = "hello world"
+        mock_resp.language = "en"
+        mock_resp.duration = 1.5
+
+        mock_client = MagicMock()
+        mock_client.audio.transcriptions.create = MagicMock(return_value=mock_resp)
+        provider._sync_client = mock_client
+
+        result = provider.transcribe(
+            AudioContent(data="ZmFrZQ==", media_type="audio/wav"),
+            model="whisper-1",
+            language="en",
+            prompt="meeting notes",
+        )
+
+        # Provider returns a normalized TranscriptionResponse.
+        assert result.text == "hello world"
+        assert result.language == "en"
+        assert result.duration == 1.5
+        assert result.provider == "openai"
+        assert result.model == "whisper-1"
+
+        # Request was shaped correctly.
+        kwargs = mock_client.audio.transcriptions.create.call_args.kwargs
+        assert kwargs["model"] == "whisper-1"
+        assert kwargs["language"] == "en"
+        assert kwargs["prompt"] == "meeting notes"
+        assert kwargs["response_format"] == "verbose_json"
+        # file is a (filename, bytes, mime) tuple — whisper extension
+        # is derived from media_type.
+        fn, fbytes, mime = kwargs["file"]
+        assert fn.endswith(".wav")
+        assert mime == "audio/wav"
+        assert isinstance(fbytes, bytes)
+
+    def test_sync_transcribe_gpt4o_uses_plain_json(self, provider: OpenAIProvider) -> None:
+        from vox import AudioContent
+
+        mock_resp = MagicMock()
+        mock_resp.text = "hi"
+        # Use spec=[] so that getattr returns None for unknown attrs
+        # (otherwise MagicMock would auto-generate them and we'd see
+        # a fake "language" / "duration" on the response).
+        mock_resp.language = None
+        mock_resp.duration = None
+
+        mock_client = MagicMock()
+        mock_client.audio.transcriptions.create = MagicMock(return_value=mock_resp)
+        provider._sync_client = mock_client
+
+        provider.transcribe(
+            AudioContent(data="ZmFrZQ=="),
+            model="gpt-4o-transcribe",
+        )
+        kwargs = mock_client.audio.transcriptions.create.call_args.kwargs
+        # gpt-4o-transcribe doesn't support verbose_json — the request
+        # should omit response_format entirely so the API uses its default.
+        assert "response_format" not in kwargs
+
+    def test_url_audio_refused(self, provider: OpenAIProvider) -> None:
+        from vox import AudioContent
+        from vox.errors import InvalidRequestError
+
+        provider._sync_client = MagicMock()
+        with pytest.raises(InvalidRequestError, match="URL-sourced AudioContent"):
+            provider.transcribe(
+                AudioContent(source_type="url", data="https://x/clip.wav"),
+                model="whisper-1",
+            )
+
+    async def test_async_transcribe_parity(self, provider: OpenAIProvider) -> None:
+        from vox import AudioContent
+
+        mock_resp = MagicMock()
+        mock_resp.text = "async hi"
+        mock_resp.language = "en"
+        mock_resp.duration = 0.5
+
+        mock_client = MagicMock()
+        mock_client.audio.transcriptions.create = AsyncMock(return_value=mock_resp)
+        provider._async_client = mock_client
+
+        result = await provider.atranscribe(
+            AudioContent(data="ZmFrZQ=="),
+            model="whisper-1",
+        )
+        assert result.text == "async hi"
+
+
+class TestOpenAISynthesize:
+    """Tests for OpenAI provider's synthesize() / asynthesize()."""
+
+    def test_sync_synthesize_builds_request_and_wraps_response(
+        self, provider: OpenAIProvider
+    ) -> None:
+        mock_resp = MagicMock()
+        mock_resp.content = b"\xff\xf3synth-audio-bytes"
+
+        mock_client = MagicMock()
+        mock_client.audio.speech.create = MagicMock(return_value=mock_resp)
+        provider._sync_client = mock_client
+
+        result = provider.synthesize(
+            "Hello world",
+            voice="alloy",
+            model="tts-1",
+            speed=1.25,
+        )
+
+        # Request was shaped correctly.
+        kwargs = mock_client.audio.speech.create.call_args.kwargs
+        assert kwargs["model"] == "tts-1"
+        assert kwargs["input"] == "Hello world"
+        assert kwargs["voice"] == "alloy"
+        assert kwargs["response_format"] == "mp3"
+        assert kwargs["speed"] == 1.25
+
+        # Response wrapped as AudioContent with default mp3 MIME.
+        from vox import AudioContent
+
+        assert isinstance(result, AudioContent)
+        assert result.media_type == "audio/mp3"
+
+    def test_sync_synthesize_honours_format(self, provider: OpenAIProvider) -> None:
+        mock_resp = MagicMock()
+        mock_resp.content = b"RIFF\x00\x00WAVE"
+        mock_client = MagicMock()
+        mock_client.audio.speech.create = MagicMock(return_value=mock_resp)
+        provider._sync_client = mock_client
+
+        result = provider.synthesize(
+            "Hi",
+            voice="alloy",
+            model="tts-1",
+            format="wav",
+        )
+        kwargs = mock_client.audio.speech.create.call_args.kwargs
+        assert kwargs["response_format"] == "wav"
+        assert result.media_type == "audio/wav"
+
+    def test_sync_synthesize_passes_instructions_for_gpt4o_mini_tts(
+        self, provider: OpenAIProvider
+    ) -> None:
+        mock_resp = MagicMock()
+        mock_resp.content = b"\xff\xf3"
+        mock_client = MagicMock()
+        mock_client.audio.speech.create = MagicMock(return_value=mock_resp)
+        provider._sync_client = mock_client
+
+        provider.synthesize(
+            "Hi",
+            voice="alloy",
+            model="gpt-4o-mini-tts",
+            instructions="Speak in a cheerful tone",
+        )
+        kwargs = mock_client.audio.speech.create.call_args.kwargs
+        assert kwargs["instructions"] == "Speak in a cheerful tone"
+
+    async def test_async_synthesize_parity(self, provider: OpenAIProvider) -> None:
+        mock_resp = MagicMock()
+        mock_resp.content = b"\xff\xf3async-audio"
+        mock_client = MagicMock()
+        mock_client.audio.speech.create = AsyncMock(return_value=mock_resp)
+        provider._async_client = mock_client
+
+        result = await provider.asynthesize("Hi", voice="alloy", model="tts-1")
+        from vox import AudioContent
+
+        assert isinstance(result, AudioContent)

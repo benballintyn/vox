@@ -26,11 +26,12 @@ from ..errors import (
     RateLimitError,
 )
 from ..models.config import ProviderConfig
-from ..models.messages import ImageContent, Message, TextContent, ToolCallData
+from ..models.messages import AudioContent, ImageContent, Message, TextContent, ToolCallData
 from ..models.reasoning import ReasoningConfig, ThinkingBlock
 from ..models.responses import (
     CompletionResponse,
     StreamChunk,
+    TranscriptionResponse,
     Usage,
     normalize_finish_reason,
 )
@@ -965,3 +966,245 @@ class OpenAIProvider(Provider):
             if isinstance(e, VoxError):
                 raise
             self._handle_error(e)
+
+    # ── Audio: transcribe + synthesize ────────────────────────────────
+
+    def transcribe(
+        self,
+        audio: AudioContent,
+        *,
+        model: str | None = None,
+        language: str | None = None,
+        prompt: str | None = None,
+        **kwargs: Any,
+    ) -> TranscriptionResponse:
+        """Transcribe audio via OpenAI ``/v1/audio/transcriptions``.
+
+        Supports ``whisper-1``, ``gpt-4o-transcribe``, and
+        ``gpt-4o-mini-transcribe``. URL-sourced ``AudioContent`` is
+        refused — the OpenAI endpoint takes uploaded bytes only.
+        """
+        resolved = self._resolve_model(model)
+        file_tuple = _audio_to_upload_tuple(audio)
+        request: dict[str, Any] = {"file": file_tuple, "model": resolved, **kwargs}
+        if language is not None:
+            request["language"] = language
+        if prompt is not None:
+            request["prompt"] = prompt
+        if _supports_verbose_json(resolved):
+            request["response_format"] = "verbose_json"
+        try:
+            resp = self._get_sync_client().audio.transcriptions.create(**request)
+        except Exception as e:
+            from ..errors import VoxError
+
+            if isinstance(e, VoxError):
+                raise
+            self._handle_error(e)
+        return _transcription_from_openai(resp, resolved)
+
+    async def atranscribe(
+        self,
+        audio: AudioContent,
+        *,
+        model: str | None = None,
+        language: str | None = None,
+        prompt: str | None = None,
+        **kwargs: Any,
+    ) -> TranscriptionResponse:
+        resolved = self._resolve_model(model)
+        file_tuple = _audio_to_upload_tuple(audio)
+        request: dict[str, Any] = {"file": file_tuple, "model": resolved, **kwargs}
+        if language is not None:
+            request["language"] = language
+        if prompt is not None:
+            request["prompt"] = prompt
+        if _supports_verbose_json(resolved):
+            request["response_format"] = "verbose_json"
+        try:
+            resp = await self._get_async_client().audio.transcriptions.create(**request)
+        except Exception as e:
+            from ..errors import VoxError
+
+            if isinstance(e, VoxError):
+                raise
+            self._handle_error(e)
+        return _transcription_from_openai(resp, resolved)
+
+    def synthesize(
+        self,
+        text: str,
+        *,
+        voice: str,
+        model: str | None = None,
+        format: str | None = None,
+        speed: float | None = None,
+        instructions: str | None = None,
+        **kwargs: Any,
+    ) -> AudioContent:
+        """Synthesize speech via OpenAI ``/v1/audio/speech``.
+
+        Supports ``tts-1`` / ``tts-1-hd`` / ``gpt-4o-mini-tts``. The
+        ``instructions`` parameter is only honoured by
+        ``gpt-4o-mini-tts``; passing it on older models is silently
+        ignored by the API.
+        """
+        resolved = self._resolve_model(model)
+        fmt = format or "mp3"
+        request: dict[str, Any] = {
+            "model": resolved,
+            "input": text,
+            "voice": voice,
+            "response_format": fmt,
+            **kwargs,
+        }
+        if speed is not None:
+            request["speed"] = speed
+        if instructions is not None:
+            request["instructions"] = instructions
+        try:
+            resp = self._get_sync_client().audio.speech.create(**request)
+        except Exception as e:
+            from ..errors import VoxError
+
+            if isinstance(e, VoxError):
+                raise
+            self._handle_error(e)
+        return AudioContent(
+            source_type="base64",
+            media_type=_openai_format_to_media_type(fmt),
+            data=resp.content,  # type: ignore[arg-type]
+        )
+
+    async def asynthesize(
+        self,
+        text: str,
+        *,
+        voice: str,
+        model: str | None = None,
+        format: str | None = None,
+        speed: float | None = None,
+        instructions: str | None = None,
+        **kwargs: Any,
+    ) -> AudioContent:
+        resolved = self._resolve_model(model)
+        fmt = format or "mp3"
+        request: dict[str, Any] = {
+            "model": resolved,
+            "input": text,
+            "voice": voice,
+            "response_format": fmt,
+            **kwargs,
+        }
+        if speed is not None:
+            request["speed"] = speed
+        if instructions is not None:
+            request["instructions"] = instructions
+        try:
+            resp = await self._get_async_client().audio.speech.create(**request)
+        except Exception as e:
+            from ..errors import VoxError
+
+            if isinstance(e, VoxError):
+                raise
+            self._handle_error(e)
+        return AudioContent(
+            source_type="base64",
+            media_type=_openai_format_to_media_type(fmt),
+            data=resp.content,  # type: ignore[arg-type]
+        )
+
+
+# ── Audio helpers ──────────────────────────────────────────────────────
+
+# Voice names accepted by OpenAI TTS endpoints. Exported for
+# discoverability — callers can pass any string, but these are the
+# documented options. ``marin`` and ``cedar`` are the highest-quality
+# voices per the docs.
+OPENAI_TTS_VOICES: tuple[str, ...] = (
+    "alloy",
+    "ash",
+    "ballad",
+    "coral",
+    "echo",
+    "sage",
+    "shimmer",
+    "verse",
+    "marin",
+    "cedar",
+)
+
+# Audio MIME → file extension hint used in the multipart upload tuple
+# for /v1/audio/transcriptions. Whisper sniffs the file by extension;
+# wrong extension can fail or transcribe garbage.
+_MIME_TO_AUDIO_EXTENSION: dict[str, str] = {
+    "audio/mp3": "mp3",
+    "audio/mpeg": "mp3",
+    "audio/wav": "wav",
+    "audio/wave": "wav",
+    "audio/x-wav": "wav",
+    "audio/mp4": "mp4",
+    "audio/m4a": "m4a",
+    "audio/x-m4a": "m4a",
+    "audio/webm": "webm",
+    "audio/flac": "flac",
+    "audio/ogg": "ogg",
+    "audio/aac": "aac",
+    "audio/aiff": "aiff",
+}
+
+# OpenAI TTS response_format → MIME for the output AudioContent.
+_OPENAI_TTS_FORMAT_TO_MIME: dict[str, str] = {
+    "mp3": "audio/mp3",
+    "opus": "audio/opus",
+    "aac": "audio/aac",
+    "flac": "audio/flac",
+    "wav": "audio/wav",
+    "pcm": "audio/L16;rate=24000",
+}
+
+
+def _audio_extension_for(media_type: str) -> str:
+    """Return the file extension Whisper should infer the format from."""
+    return _MIME_TO_AUDIO_EXTENSION.get(media_type.lower(), "wav")
+
+
+def _openai_format_to_media_type(fmt: str) -> str:
+    """Map an OpenAI TTS ``response_format`` to a MIME type for AudioContent."""
+    return _OPENAI_TTS_FORMAT_TO_MIME.get(fmt.lower(), f"audio/{fmt}")
+
+
+def _audio_to_upload_tuple(audio: AudioContent) -> tuple[str, bytes, str]:
+    """Decode an AudioContent into the ``(name, bytes, mime)`` tuple Whisper expects."""
+    import base64
+
+    if audio.source_type == "url":
+        raise InvalidRequestError(
+            "URL-sourced AudioContent cannot be uploaded to OpenAI transcribe. "
+            "Download the audio bytes and pass them as a base64 AudioContent.",
+            provider="openai",
+        )
+    raw = base64.standard_b64decode(audio.data)
+    ext = _audio_extension_for(audio.media_type)
+    return (f"audio.{ext}", raw, audio.media_type)
+
+
+def _supports_verbose_json(model: str) -> bool:
+    """Whisper supports verbose_json; gpt-4o-transcribe / mini-transcribe do not."""
+    return model.lower().startswith("whisper")
+
+
+def _transcription_from_openai(resp: Any, model: str) -> TranscriptionResponse:
+    """Map an OpenAI transcription response onto a vox TranscriptionResponse.
+
+    Pulls ``language`` and ``duration`` from the verbose_json shape when
+    Whisper produces them; defaults to ``None`` for gpt-4o-transcribe
+    responses which lack those fields.
+    """
+    return TranscriptionResponse(
+        text=getattr(resp, "text", ""),
+        language=getattr(resp, "language", None),
+        duration=getattr(resp, "duration", None),
+        provider="openai",
+        model=model,
+    )

@@ -3,7 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterator, Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    # Annotation-only imports — VoxClient just forwards these between
+    # the caller and the provider, so we never instantiate them here.
+    # Keeps the formatter from stripping the imports between Edits.
+    from .models.messages import AudioContent
+    from .models.responses import TranscriptionResponse
 
 from pydantic import BaseModel
 
@@ -343,3 +350,143 @@ class VoxClient:
             if chunk.type == "usage":
                 self._populate_cost(chunk.usage, model)
             yield chunk
+
+    # ── Audio: transcribe + synthesize ────────────────────────────────
+
+    def transcribe(
+        self,
+        audio: AudioContent,
+        *,
+        model: str,
+        provider: str | None = None,
+        language: str | None = None,
+        prompt: str | None = None,
+        **kwargs: Any,
+    ) -> TranscriptionResponse:
+        """Synchronously transcribe audio to text.
+
+        Resolves the provider from the model name (same dispatch logic
+        as :meth:`complete`) and delegates. Providers without native
+        STT raise :class:`InvalidRequestError`.
+
+        Args:
+            audio: The audio to transcribe.
+            model: STT model identifier (e.g. ``"whisper-1"``,
+                ``"gpt-4o-transcribe"``, ``"gemini-3.5-flash"``).
+            provider: Explicit provider override (``"openai"`` /
+                ``"gemini"``). Auto-resolved from the model name otherwise.
+            language: Optional ISO-639-1 hint. OpenAI Whisper uses it;
+                Gemini ignores.
+            prompt: Optional bias string. OpenAI Whisper uses it as a
+                vocab-bias prompt; Gemini uses it as the transcription
+                instruction itself (overriding the default).
+            **kwargs: Provider-specific passthrough.
+
+        Returns:
+            A :class:`TranscriptionResponse`.
+        """
+        resolved = resolve_provider(model, provider)
+        adapter = self._get_provider(resolved)
+        response = adapter.transcribe(
+            audio,
+            model=model,
+            language=language,
+            prompt=prompt,
+            **kwargs,
+        )
+        if response.usage is not None:
+            self._populate_cost(response.usage, model)
+        return response
+
+    async def atranscribe(
+        self,
+        audio: AudioContent,
+        *,
+        model: str,
+        provider: str | None = None,
+        language: str | None = None,
+        prompt: str | None = None,
+        **kwargs: Any,
+    ) -> TranscriptionResponse:
+        """Asynchronously transcribe audio to text. See :meth:`transcribe`."""
+        resolved = resolve_provider(model, provider)
+        adapter = self._get_provider(resolved)
+        response = await adapter.atranscribe(
+            audio,
+            model=model,
+            language=language,
+            prompt=prompt,
+            **kwargs,
+        )
+        if response.usage is not None:
+            self._populate_cost(response.usage, model)
+        return response
+
+    def synthesize(
+        self,
+        text: str,
+        *,
+        voice: str,
+        model: str,
+        provider: str | None = None,
+        format: str | None = None,
+        speed: float | None = None,
+        instructions: str | None = None,
+        **kwargs: Any,
+    ) -> AudioContent:
+        """Synchronously synthesize text to speech.
+
+        Args:
+            text: Text to speak.
+            voice: Voice name. Provider-specific — see
+                ``vox.providers.openai.OPENAI_TTS_VOICES`` and
+                ``vox.providers.gemini.GEMINI_TTS_VOICES``.
+            model: TTS model identifier.
+            provider: Explicit provider override.
+            format: Output format (``"mp3"`` / ``"wav"`` / ``"opus"`` /
+                ``"aac"`` / ``"flac"`` / ``"pcm"``). OpenAI honours
+                this; Gemini always emits PCM-wrapped-as-WAV.
+            speed: Playback speed (0.25-4.0). OpenAI only.
+            instructions: Voice direction prompt (``gpt-4o-mini-tts``
+                and newer only).
+            **kwargs: Provider-specific passthrough.
+
+        Returns:
+            An :class:`AudioContent` containing the synthesized audio.
+        """
+        resolved = resolve_provider(model, provider)
+        adapter = self._get_provider(resolved)
+        return adapter.synthesize(
+            text,
+            voice=voice,
+            model=model,
+            format=format,
+            speed=speed,
+            instructions=instructions,
+            **kwargs,
+        )
+
+    async def asynthesize(
+        self,
+        text: str,
+        *,
+        voice: str,
+        model: str,
+        provider: str | None = None,
+        format: str | None = None,
+        speed: float | None = None,
+        instructions: str | None = None,
+        **kwargs: Any,
+    ) -> AudioContent:
+        """Asynchronously synthesize text to speech. See :meth:`synthesize`."""
+        resolved = resolve_provider(model, provider)
+        adapter = self._get_provider(resolved)
+        return await adapter.asynthesize(
+            text,
+            voice=voice,
+            model=model,
+            format=format,
+            speed=speed,
+            instructions=instructions,
+            **kwargs,
+        )

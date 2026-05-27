@@ -20,6 +20,7 @@ from .errors import (
 )
 from .models.config import ProviderConfig
 from .models.messages import (
+    AudioContent,
     ContentPart,
     ImageContent,
     Message,
@@ -38,6 +39,7 @@ from .models.responses import (
     CompletionResponse,
     FinishReason,
     StreamChunk,
+    TranscriptionResponse,
     Usage,
     normalize_finish_reason,
 )
@@ -47,6 +49,7 @@ __all__ = [
     "MODEL_PRICING",
     "PRICING_SNAPSHOT_DATE",
     "AnthropicReasoning",
+    "AudioContent",
     "AuthenticationError",
     "CompletionResponse",
     "ContentFilterError",
@@ -72,6 +75,7 @@ __all__ = [
     "ToolCallData",
     "ToolResult",
     "ToolSpec",
+    "TranscriptionResponse",
     "Usage",
     "VideoContent",
     "VoxClient",

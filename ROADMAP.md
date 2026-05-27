@@ -36,17 +36,22 @@ and (b) anticipates patterns (multimodal voice assistants, video
 analysis pipelines) likely to land on vox before the canonical
 "a consumer is blocked on this" trigger.
 
-- **Audio I/O.** Speech-to-text input, text-to-speech output. Each
-  provider's API is differently shaped — OpenAI exposes audio via the
-  Responses API on the `gpt-4o-audio` family (input + output
-  modalities); Gemini accepts native audio input on 2.x+ via the
-  standard `inline_data` / `file_data` parts, with text-to-speech as a
-  separate TTS surface; Anthropic doesn't yet have a native audio path.
-  Likely shape: an `AudioContent` content-part type parallel to
-  `ImageContent` (raw `bytes` / base64 / URL, with `media_type`); a
-  streaming-audio-out path on `CompletionResponse` or as a new content
-  kind. Surface design is non-trivial; co-design with a real consumer
-  pattern if possible.
+- ~~**Audio I/O.**~~ Shipped as dedicated `VoxClient.transcribe()`
+  + `VoxClient.synthesize()` methods (plus `atranscribe` /
+  `asynthesize`), rather than bolted into `complete()`. The audit
+  surfaced that the flagship reasoning models (Claude Opus / Sonnet,
+  GPT-5, Gemini 3) don't accept audio natively — only audio-tuned
+  models (`gpt-audio-*`, `gemini-3.5-flash` for understanding,
+  dedicated TTS models) do — so threading audio through `complete()`
+  would have meant losing reasoning / structured-output / tool-use
+  for any consumer using audio. Native paths: OpenAI Whisper +
+  `tts-1` / `gpt-4o-mini-tts`; Gemini `generate_content` for both STT
+  (transcribe-via-prompt) and TTS (`gemini-3.1-flash-tts-preview`,
+  with PCM-to-WAV wrapping). Anthropic / OpenRouter / LM Studio
+  raise `InvalidRequestError` — STT fallback would require a real
+  per-call API hit, not the local-CPU substitution video uses. See
+  the README "Audio I/O" section. Realtime / bidirectional voice
+  remains out of scope (it's a completely different shape).
 - ~~**Video input.**~~ Shipped — see `VideoContent` (parallel to
   `ImageContent`). Gemini consumes video natively (inline base64 or
   hosted URI, including YouTube links). OpenAI / Anthropic /
