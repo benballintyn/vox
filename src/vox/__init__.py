@@ -19,7 +19,14 @@ from .errors import (
     VoxError,
 )
 from .models.config import ProviderConfig
-from .models.messages import ContentPart, ImageContent, Message, TextContent, ToolCallData
+from .models.messages import (
+    ContentPart,
+    ImageContent,
+    Message,
+    TextContent,
+    ToolCallData,
+    VideoContent,
+)
 from .models.reasoning import (
     AnthropicReasoning,
     GeminiReasoning,
@@ -66,6 +73,7 @@ __all__ = [
     "ToolResult",
     "ToolSpec",
     "Usage",
+    "VideoContent",
     "VoxClient",
     "VoxError",
     "estimate_cost",

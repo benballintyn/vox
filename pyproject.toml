@@ -40,7 +40,17 @@ Changelog = "https://github.com/benballintyn/vox/blob/main/CHANGELOG.md"
 openai = ["openai>=1.50"]
 anthropic = ["anthropic>=0.40"]
 gemini = ["google-genai>=1.0"]
-all = ["openai>=1.50", "anthropic>=0.40", "google-genai>=1.0"]
+# Client-side video decoding for VideoContent fallback on providers
+# without a native video-input surface (currently: every provider
+# except Gemini). Pulls in ffmpeg via imageio-ffmpeg. Not needed if you
+# only ever send video to Gemini, or never send video at all.
+video = ["imageio[ffmpeg]>=2.34"]
+all = [
+    "openai>=1.50",
+    "anthropic>=0.40",
+    "google-genai>=1.0",
+    "imageio[ffmpeg]>=2.34",
+]
 
 [tool.poetry]
 packages = [{include = "vox", from = "src"}]
@@ -58,6 +68,10 @@ pytest-mock = "^3.14.0"
 pytest-rerunfailures = "^15.0"
 ruff = ">=0.4"
 mypy = "^2.1.0"
+# Used by tests covering the VideoContent fallback (frame extraction)
+# in src/vox/_video.py — same package end users install via the
+# `vox-llm[video]` extra.
+imageio = {extras = ["ffmpeg"], version = ">=2.34"}
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]

@@ -491,3 +491,51 @@ class TestReasoningTranslation:
             stop=None,
         )
         assert "reasoning" not in request
+
+
+class TestVideoFallback:
+    """VideoContent on OpenAI is auto-converted to image frames + warning."""
+
+    def test_video_replaced_with_image_frames(self, provider: OpenAIProvider) -> None:
+        from vox import ImageContent, Message, TextContent, VideoContent
+
+        # Send video; substitute helper turns it into image frames; translation
+        # emits input_image parts to the Responses API.
+        messages = [
+            Message(
+                role="user",
+                content=[
+                    TextContent(text="describe"),
+                    VideoContent(data="ZmFrZQ==", media_type="video/mp4"),
+                ],
+            )
+        ]
+
+        # Patch the substitute helper at its definition site so the
+        # local-import in the provider resolves to the patched object.
+        from unittest.mock import patch as _patch
+
+        fake_frames = [
+            ImageContent(data="ZnJhbWUx", media_type="image/jpeg"),
+            ImageContent(data="ZnJhbWUy", media_type="image/jpeg"),
+        ]
+        with _patch(
+            "vox._video.substitute_video_with_frames",
+            return_value=[
+                TextContent(text="describe"),
+                *fake_frames,
+            ],
+        ) as sub:
+            items, _ = provider._translate_input(messages)
+
+        sub.assert_called_once()
+        # provider_name should be forwarded.
+        assert sub.call_args.kwargs["provider_name"] == "openai"
+
+        # Resulting content has 1 text + 2 image parts.
+        content = items[0]["content"]
+        text_parts = [p for p in content if p["type"] == "input_text"]
+        image_parts = [p for p in content if p["type"] == "input_image"]
+        assert len(text_parts) == 1
+        assert len(image_parts) == 2
+        assert image_parts[0]["image_url"].startswith("data:image/jpeg;base64,")

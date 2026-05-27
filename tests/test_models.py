@@ -124,6 +124,52 @@ class TestImageContent:
         assert img.data == url
 
 
+class TestVideoContent:
+    """Tests for VideoContent's bytes-friendly data accessor and defaults."""
+
+    def test_default_media_type_is_mp4(self) -> None:
+        from vox import VideoContent
+
+        video = VideoContent(data="ZmFrZQ==")
+        assert video.media_type == "video/mp4"
+        assert video.type == "video"
+        assert video.source_type == "base64"
+
+    def test_data_accepts_raw_bytes_and_base64_encodes(self) -> None:
+        """``VideoContent(data=raw_bytes)`` auto-encodes to a base64 ASCII string.
+
+        Mirrors the ImageContent ergonomics — callers who hold raw
+        video bytes from a file read shouldn't need to base64 by hand.
+        """
+        import base64
+
+        from vox import VideoContent
+
+        raw = b"\x00\x00\x00\x20ftypisom"
+        video = VideoContent(data=raw, media_type="video/mp4")  # type: ignore[arg-type]
+        assert isinstance(video.data, str)
+        assert video.data == base64.standard_b64encode(raw).decode("ascii")
+
+    def test_data_string_passes_through(self) -> None:
+        from vox import VideoContent
+
+        already_b64 = "AAAAIGZ0eXBpc29t"
+        video = VideoContent(data=already_b64)
+        assert video.data == already_b64
+
+    def test_data_url_string_passes_through(self) -> None:
+        """URL strings under ``source_type="url"`` are not touched.
+
+        Gemini supports YouTube URLs and Files-API file URIs through
+        this path.
+        """
+        from vox import VideoContent
+
+        url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        video = VideoContent(source_type="url", data=url, media_type="video/mp4")
+        assert video.data == url
+
+
 class TestTool:
     """Tests for Tool, ToolCall, and ToolResult models."""
 

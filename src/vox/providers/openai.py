@@ -273,8 +273,14 @@ class OpenAIProvider(Provider):
         if isinstance(msg.content, str):
             return [{"type": "input_text", "text": msg.content}]
 
+        from .._video import substitute_video_with_frames
+
+        content_parts = substitute_video_with_frames(
+            list(msg.content), provider_name=self.provider_name
+        )
+
         parts: list[dict[str, Any]] = []
-        for part in msg.content:
+        for part in content_parts:
             if isinstance(part, TextContent):
                 parts.append({"type": "input_text", "text": part.text})
             elif isinstance(part, ImageContent):

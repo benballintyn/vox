@@ -23,7 +23,7 @@ from ..errors import (
     RateLimitError,
 )
 from ..models.config import ProviderConfig
-from ..models.messages import ImageContent, Message, TextContent, ToolCallData
+from ..models.messages import ImageContent, Message, TextContent, ToolCallData, VideoContent
 from ..models.reasoning import (
     LEVEL_TO_BUDGET_TOKENS,
     LEVEL_TO_GEMINI3_LEVEL,
@@ -184,7 +184,12 @@ class GeminiProvider(Provider):
         for part in msg.content:
             if isinstance(part, TextContent):
                 parts.append(types.Part(text=part.text))
-            elif isinstance(part, ImageContent):
+            elif isinstance(part, (ImageContent, VideoContent)):
+                # Gemini consumes images and video through the same two
+                # Part shapes — file_data for hosted URIs (including
+                # YouTube links for video), inline_data for raw bytes.
+                # The mime_type field carries the modality (image/* vs
+                # video/*), so a single branch covers both.
                 if part.source_type == "url":
                     parts.append(
                         types.Part(

@@ -47,14 +47,17 @@ analysis pipelines) likely to land on vox before the canonical
   streaming-audio-out path on `CompletionResponse` or as a new content
   kind. Surface design is non-trivial; co-design with a real consumer
   pattern if possible.
-- **Video input.** Gemini natively supports video as a `Part`
-  (`inline_data` with `video/*` MIME, or via uploaded files); OpenAI's
-  Responses API accepts video frames through specific models;
-  Anthropic doesn't have a native video surface. Likely shape: a
-  `VideoContent` content-part type parallel to `ImageContent`, same
-  bytes/base64/URL surface, per-provider routing. Less total surface
-  than audio (input only — no output side), but high per-provider
-  variance.
+- ~~**Video input.**~~ Shipped — see `VideoContent` (parallel to
+  `ImageContent`). Gemini consumes video natively (inline base64 or
+  hosted URI, including YouTube links). OpenAI / Anthropic /
+  OpenRouter / LM Studio fall back to client-side frame extraction
+  (uniform sampling, ~1 fps, max 8 frames) via the optional
+  `vox-llm[video]` extra, with a `loguru` warning per substitution
+  so the cost implication stays visible. README "Multimodal (Vision)
+  → Video input" covers the API. The audit also surfaced that
+  OpenAI's Responses API has no native `input_video` content part
+  today (only Sora generation via `/v1/videos`) — when it ships, add
+  a translation branch and drop that provider from the fallback list.
 
 ## Candidate features — pull in when a consumer needs one
 
