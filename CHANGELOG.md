@@ -4,6 +4,13 @@ All notable changes to vox are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0](https://github.com/benballintyn/vox/compare/v0.3.1...v0.4.0) (2026-05-27)
+
+
+### Features
+
+* video input via VideoContent content part ([#37](https://github.com/benballintyn/vox/issues/37)) ([011260d](https://github.com/benballintyn/vox/commit/011260d6445545a9e0ef926d350652cefcf79a24))
+
 ## [0.3.1](https://github.com/benballintyn/vox/compare/v0.3.0...v0.3.1) (2026-05-26)
 
 
