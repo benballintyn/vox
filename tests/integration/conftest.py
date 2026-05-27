@@ -27,6 +27,10 @@ class ProviderProfile:
         model: Model ID for ordinary completions / streaming / tools / vision.
         env_var: Environment variable that must hold the API key.
         supports_vision: Whether ``model`` accepts image inputs.
+        supports_native_video: Whether ``model`` accepts ``video/*``
+            content natively (currently: Gemini only). vox falls back
+            to client-side frame extraction for the rest, but native
+            video is a different code path worth testing end-to-end.
         supports_reasoning: Whether ``model`` supports ``ReasoningConfig``.
         exposes_thinking_blocks: Whether ``response.thinking`` is populated
             by default with reasoning enabled. (Anthropic: yes. OpenAI:
@@ -45,6 +49,7 @@ class ProviderProfile:
     model: str
     env_var: str
     supports_vision: bool = True
+    supports_native_video: bool = False
     supports_reasoning: bool = True
     exposes_thinking_blocks: bool = False
     bad_model_id: str = ""
@@ -74,6 +79,7 @@ PROFILES: list[ProviderProfile] = [
         env_var="GEMINI_API_KEY",
         exposes_thinking_blocks=False,
         bad_model_id="gemini-bogus-9999-does-not-exist",
+        supports_native_video=True,
     ),
     ProviderProfile(
         name="openrouter",
@@ -147,6 +153,15 @@ def vision_profile(request: pytest.FixtureRequest) -> ProviderProfile:
 )
 def reasoning_profile(request: pytest.FixtureRequest) -> ProviderProfile:
     """Like ``profile``, but limited to reasoning-capable providers."""
+    return _require_key(request.param)
+
+
+@pytest.fixture(
+    params=[p for p in PROFILES if p.supports_native_video],
+    ids=lambda p: p.name,
+)
+def video_profile(request: pytest.FixtureRequest) -> ProviderProfile:
+    """Like ``profile``, but limited to providers with native video input."""
     return _require_key(request.param)
 
 

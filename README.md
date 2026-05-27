@@ -358,6 +358,56 @@ message = Message(
 )
 ```
 
+### Video input
+
+vox accepts video via a `VideoContent` part that mirrors `ImageContent`'s
+shape. Provider routing:
+
+* **Gemini** consumes video natively (inline base64 or hosted URI,
+  including YouTube links — `video/mp4`, `video/webm`, etc.).
+* **OpenAI, Anthropic, OpenRouter, LM Studio** have no native video
+  input today. vox falls back to client-side frame extraction:
+  it decodes the video, samples a handful of frames at ~1 fps
+  (capped at 8), and substitutes them as `ImageContent` parts before
+  dispatch. A loud warning is emitted via `loguru` so the cost
+  implication is visible. Install the extra to enable this:
+  `pip install 'vox-llm[video]'`. Consumers that want explicit
+  control over sampling should pass `ImageContent` parts directly.
+
+```python
+from pathlib import Path
+from vox import Message, TextContent, VideoContent
+
+video = VideoContent(
+    source_type="base64",
+    media_type="video/mp4",
+    data=Path("clip.mp4").read_bytes(),  # raw bytes auto-base64 encoded
+)
+
+response = client.complete(
+    messages=[
+        Message(
+            role="user",
+            content=[
+                TextContent(text="Summarize what happens in this clip."),
+                video,
+            ],
+        )
+    ],
+    model="gemini-2.5-pro",  # native; or gpt-5-mini for frame-fallback
+)
+```
+
+Hosted-URI form (Gemini only — YouTube link or Files-API URI):
+
+```python
+VideoContent(
+    source_type="url",
+    media_type="video/mp4",
+    data="https://www.youtube.com/watch?v=...",
+)
+```
+
 ## Error Handling
 
 All provider errors are normalized to a consistent hierarchy:

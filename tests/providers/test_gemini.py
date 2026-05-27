@@ -167,6 +167,57 @@ class TestMessageTranslation:
         part_call_kwargs = [c.kwargs for c in types_mock.Part.call_args_list]
         assert not any("thought_signature" in kw for kw in part_call_kwargs)
 
+    @patch("vox.providers.gemini._import_genai_types")
+    def test_video_inline_translates_to_blob(self, mock_types, provider: GeminiProvider) -> None:
+        """VideoContent(source_type=base64) becomes a Part(inline_data=Blob(video/*))."""
+        from vox import Message, TextContent, VideoContent
+
+        types_mock = MagicMock()
+        mock_types.return_value = types_mock
+
+        messages = [
+            Message(
+                role="user",
+                content=[
+                    TextContent(text="What's in this clip?"),
+                    VideoContent(data="AAAA", media_type="video/mp4"),
+                ],
+            )
+        ]
+        provider._translate_contents(messages)
+
+        # Inspect kwargs for the Blob constructor call.
+        blob_calls = types_mock.Blob.call_args_list
+        assert blob_calls, "Expected types.Blob(...) to be called for inline video"
+        assert blob_calls[0].kwargs["mime_type"] == "video/mp4"
+
+    @patch("vox.providers.gemini._import_genai_types")
+    def test_video_url_translates_to_file_data(self, mock_types, provider: GeminiProvider) -> None:
+        """VideoContent(source_type=url) → Part(file_data=FileData(file_uri, mime_type))."""
+        from vox import Message, VideoContent
+
+        types_mock = MagicMock()
+        mock_types.return_value = types_mock
+
+        messages = [
+            Message(
+                role="user",
+                content=[
+                    VideoContent(
+                        source_type="url",
+                        data="https://youtu.be/dQw4w9WgXcQ",
+                        media_type="video/mp4",
+                    ),
+                ],
+            )
+        ]
+        provider._translate_contents(messages)
+
+        fd_calls = types_mock.FileData.call_args_list
+        assert fd_calls, "Expected types.FileData(...) to be called for URL video"
+        assert fd_calls[0].kwargs["file_uri"] == "https://youtu.be/dQw4w9WgXcQ"
+        assert fd_calls[0].kwargs["mime_type"] == "video/mp4"
+
 
 class TestResponseTranslation:
     """Tests for Gemini response translation."""

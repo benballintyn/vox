@@ -26,9 +26,10 @@ from __future__ import annotations
 
 from typing import Literal
 
+import pytest
 from pydantic import BaseModel, Field
 
-from vox import ImageContent, Message, TextContent, Tool, VoxClient
+from vox import ImageContent, Message, TextContent, Tool, VideoContent, VoxClient
 
 from .conftest import ProviderProfile
 
@@ -263,3 +264,74 @@ def test_vision_with_response_schema(
     color_lower = response.parsed.color.lower()
     matched = next((c for c in _RED_FAMILY if c in color_lower), None)
     assert matched, f"structured-output color is not red-family; got {response.parsed.color!r}"
+
+
+# ── Video input ────────────────────────────────────────────────────────
+
+
+@pytest.fixture(scope="session")
+def red_video_bytes() -> bytes:
+    """Generate a tiny 2-second solid-red mp4 for the video tests.
+
+    32x32 at 10 fps, libx264-encoded — same colour palette as the
+    bundled ``red_square.png`` so the assertion can be the same
+    red-family check. Generated on the fly to avoid checking a binary
+    fixture into the repo; relies on ``imageio[ffmpeg]`` from the dev
+    dependency group (or the ``vox-llm[video]`` extra).
+    """
+    from io import BytesIO
+
+    import imageio.v3 as iio
+    import numpy as np
+
+    n_frames = 20  # 2 seconds at 10 fps
+    frames = np.zeros((n_frames, 32, 32, 3), dtype=np.uint8)
+    frames[:, :, :, 0] = 255  # solid red
+
+    buf = BytesIO()
+    iio.imwrite(buf, frames, extension=".mp4", fps=10, codec="libx264")
+    return buf.getvalue()
+
+
+def test_video_native_identifies_red_clip(
+    video_profile: ProviderProfile,
+    client: VoxClient,
+    red_video_bytes: bytes,
+) -> None:
+    """A solid-red 2s mp4 round-trips through native ``VideoContent``.
+
+    Only runs on providers with native video input (currently Gemini).
+    Asserts the model identifies the clip's colour as red-family —
+    same loose family check as the image vision tests, since pure
+    RGB(255, 0, 0) re-encoded through libx264 can read as red/pink/
+    crimson depending on the model.
+
+    Tests the native code path end-to-end: VideoContent →
+    Part(inline_data=Blob(mime_type=video/mp4, data=bytes)) on Gemini.
+    The fallback / frame-extraction path is covered separately in
+    ``tests/test_video.py``.
+    """
+    response = client.complete(
+        [
+            Message(
+                role="user",
+                content=[
+                    TextContent(
+                        text=(
+                            "Identify the dominant colour visible in this "
+                            "short video clip. Reply with just the colour "
+                            "name, one word."
+                        )
+                    ),
+                    VideoContent(
+                        data=red_video_bytes,  # type: ignore[arg-type]
+                        media_type="video/mp4",
+                    ),
+                ],
+            )
+        ],
+        model=video_profile.model,
+        provider=video_profile.name,
+        max_tokens=1024,
+    )
+    _assert_red_family(response.message.text)

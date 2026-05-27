@@ -251,3 +251,45 @@ class TestComplete:
             model="claude-sonnet-4-20250514",
         )
         assert result.message.text == "Hi!"
+
+
+class TestVideoFallback:
+    """VideoContent on Anthropic is auto-converted to image frames + warning."""
+
+    def test_video_replaced_with_image_frames(self, provider: AnthropicProvider) -> None:
+        from unittest.mock import patch as _patch
+
+        from vox import ImageContent, Message, TextContent, VideoContent
+
+        messages = [
+            Message(
+                role="user",
+                content=[
+                    TextContent(text="describe"),
+                    VideoContent(data="ZmFrZQ==", media_type="video/mp4"),
+                ],
+            )
+        ]
+
+        fake_frames = [
+            ImageContent(data="ZnJhbWUx", media_type="image/jpeg"),
+            ImageContent(data="ZnJhbWUy", media_type="image/jpeg"),
+        ]
+        with _patch(
+            "vox._video.substitute_video_with_frames",
+            return_value=[
+                TextContent(text="describe"),
+                *fake_frames,
+            ],
+        ) as sub:
+            result, _ = provider._translate_messages(messages)
+
+        sub.assert_called_once()
+        assert sub.call_args.kwargs["provider_name"] == "anthropic"
+
+        content = result[0]["content"]
+        text_parts = [p for p in content if p["type"] == "text"]
+        image_parts = [p for p in content if p["type"] == "image"]
+        assert len(text_parts) == 1
+        assert len(image_parts) == 2
+        assert image_parts[0]["source"]["media_type"] == "image/jpeg"
