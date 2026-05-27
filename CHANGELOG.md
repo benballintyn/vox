@@ -4,6 +4,13 @@ All notable changes to vox are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0](https://github.com/benballintyn/vox/compare/v0.4.0...v0.5.0) (2026-05-27)
+
+
+### Features
+
+* speech-to-text and text-to-speech via transcribe/synthesize ([#40](https://github.com/benballintyn/vox/issues/40)) ([1ce3d1d](https://github.com/benballintyn/vox/commit/1ce3d1d42e3bdd21ca91fb4777520eb870d47eff))
+
 ## [0.4.0](https://github.com/benballintyn/vox/compare/v0.3.1...v0.4.0) (2026-05-27)
 
 
