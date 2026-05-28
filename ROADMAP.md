@@ -72,10 +72,13 @@ analysis pipelines) likely to land on vox before the canonical
   Gemini has an explicit context-caching API; OpenAI caches automatically
   (no surface needed). Real cost savings for consumers with large, stable
   system prompts.
-- **Unified retry / backoff.** vox currently relies on each SDK's own
-  `max_retries`. A vox-level, configurable retry policy that honours the
-  `retry_after` already extracted onto `RateLimitError` would give
-  consistent behaviour across providers.
+- ~~**Unified retry / backoff.**~~ Shipped as `RetryPolicy` + per-call
+  `retry_policy=` override on every entry point. Defaults: 3 retries,
+  exponential backoff with ±25% jitter, capped at 30s per sleep,
+  retrying only `RateLimitError` + `ProviderError`. Honours
+  `RateLimitError.retry_after` when the provider supplies it.
+  Streaming retries fire only before the first chunk is yielded.
+  See the README "Retries" section.
 - **Pre-flight token counting.** Each provider has its own tokenizer
   (tiktoken for OpenAI, Anthropic's tokenizer endpoint, etc.). Adding
   one would let consumers estimate token usage before paying for the

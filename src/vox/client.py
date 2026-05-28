@@ -16,6 +16,13 @@ from pydantic import BaseModel
 
 from ._pricing import ModelPricing, estimate_cost
 from ._registry import resolve_provider
+from ._retry import (
+    RetryPolicy,
+    retry_async,
+    retry_stream_async,
+    retry_stream_sync,
+    retry_sync,
+)
 from .errors import InvalidRequestError
 from .models.config import ProviderConfig
 from .models.messages import Message
@@ -45,6 +52,11 @@ class VoxClient:
             snapshot when computing ``usage.estimated_cost``. Pass a
             ``ModelPricing(...)`` for any model you want priced
             differently (or for models vox doesn't know about at all).
+        retry_policy: Default retry behaviour applied to every call.
+            Per-call ``retry_policy=`` overrides this. ``None`` means
+            vox's default policy (3 retries with exponential backoff,
+            honouring ``RateLimitError.retry_after`` — see
+            :class:`RetryPolicy`).
     """
 
     def __init__(
@@ -59,6 +71,7 @@ class VoxClient:
         openrouter_app_url: str | None = None,
         provider_configs: dict[str, ProviderConfig] | None = None,
         custom_pricing: dict[str, ModelPricing] | None = None,
+        retry_policy: RetryPolicy | None = None,
     ) -> None:
         self._provider_configs = provider_configs or {}
         self._api_keys = {
@@ -72,6 +85,11 @@ class VoxClient:
         self._openrouter_app_url = openrouter_app_url
         self._providers: dict[str, Provider] = {}
         self._custom_pricing: dict[str, ModelPricing] = custom_pricing or {}
+        self._default_retry_policy = retry_policy or RetryPolicy()
+
+    def _resolve_retry_policy(self, override: RetryPolicy | None) -> RetryPolicy:
+        """Pick the per-call policy if provided, else the client default."""
+        return override if override is not None else self._default_retry_policy
 
     def _populate_cost(self, usage: Usage | None, model: str) -> None:
         """Annotate a ``Usage`` in place with ``model`` + ``estimated_cost``.
@@ -175,6 +193,7 @@ class VoxClient:
         response_schema: type[BaseModel] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
+        retry_policy: RetryPolicy | None = None,
         **kwargs: Any,
     ) -> CompletionResponse:
         """Synchronous completion.
@@ -191,6 +210,8 @@ class VoxClient:
             response_schema: Pydantic model for structured output.
             reasoning: Reasoning configuration.
             stop: Stop sequences.
+            retry_policy: Per-call retry override. Defaults to the
+                client-level policy from the constructor.
             **kwargs: Provider-specific passthrough.
 
         Returns:
@@ -198,16 +219,20 @@ class VoxClient:
         """
         resolved = resolve_provider(model, provider)
         adapter = self._get_provider(resolved)
-        response = adapter.complete(
-            messages,
-            model=model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            tools=tools,
-            response_schema=response_schema,
-            reasoning=reasoning,
-            stop=stop,
-            **kwargs,
+        policy = self._resolve_retry_policy(retry_policy)
+        response = retry_sync(
+            lambda: adapter.complete(
+                messages,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                tools=tools,
+                response_schema=response_schema,
+                reasoning=reasoning,
+                stop=stop,
+                **kwargs,
+            ),
+            policy=policy,
         )
         self._populate_cost(response.usage, model)
         return response
@@ -224,6 +249,7 @@ class VoxClient:
         response_schema: type[BaseModel] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
+        retry_policy: RetryPolicy | None = None,
         **kwargs: Any,
     ) -> CompletionResponse:
         """Asynchronous completion.
@@ -238,6 +264,7 @@ class VoxClient:
             response_schema: Pydantic model for structured output.
             reasoning: Reasoning configuration.
             stop: Stop sequences.
+            retry_policy: Per-call retry override.
             **kwargs: Provider-specific passthrough.
 
         Returns:
@@ -245,16 +272,20 @@ class VoxClient:
         """
         resolved = resolve_provider(model, provider)
         adapter = self._get_provider(resolved)
-        response = await adapter.acomplete(
-            messages,
-            model=model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            tools=tools,
-            response_schema=response_schema,
-            reasoning=reasoning,
-            stop=stop,
-            **kwargs,
+        policy = self._resolve_retry_policy(retry_policy)
+        response = await retry_async(
+            lambda: adapter.acomplete(
+                messages,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                tools=tools,
+                response_schema=response_schema,
+                reasoning=reasoning,
+                stop=stop,
+                **kwargs,
+            ),
+            policy=policy,
         )
         self._populate_cost(response.usage, model)
         return response
@@ -270,6 +301,7 @@ class VoxClient:
         tools: Sequence[ToolSpec] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
+        retry_policy: RetryPolicy | None = None,
         **kwargs: Any,
     ) -> Iterator[StreamChunk]:
         """Synchronous streaming completion.
@@ -283,6 +315,9 @@ class VoxClient:
             tools: Available tools.
             reasoning: Reasoning configuration.
             stop: Stop sequences.
+            retry_policy: Per-call retry override. Retries only fire
+                before the first chunk yields — once data has started
+                arriving, errors propagate as-is.
             **kwargs: Provider-specific passthrough.
 
         Yields:
@@ -290,16 +325,23 @@ class VoxClient:
         """
         resolved = resolve_provider(model, provider)
         adapter = self._get_provider(resolved)
-        for chunk in adapter.stream(
-            messages,
-            model=model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            tools=tools,
-            reasoning=reasoning,
-            stop=stop,
-            **kwargs,
-        ):
+        policy = self._resolve_retry_policy(retry_policy)
+
+        def _open_stream() -> Iterator[StreamChunk]:
+            return iter(
+                adapter.stream(
+                    messages,
+                    model=model,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    tools=tools,
+                    reasoning=reasoning,
+                    stop=stop,
+                    **kwargs,
+                )
+            )
+
+        for chunk in retry_stream_sync(_open_stream, policy=policy):
             # Annotate the usage chunk with model + estimated_cost so
             # streaming consumers get the same telemetry as non-streamers.
             if chunk.type == "usage":
@@ -317,6 +359,7 @@ class VoxClient:
         tools: Sequence[ToolSpec] | None = None,
         reasoning: ReasoningConfig | None = None,
         stop: list[str] | None = None,
+        retry_policy: RetryPolicy | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[StreamChunk]:
         """Asynchronous streaming completion.
@@ -330,6 +373,7 @@ class VoxClient:
             tools: Available tools.
             reasoning: Reasoning configuration.
             stop: Stop sequences.
+            retry_policy: Per-call retry override. See :meth:`stream`.
             **kwargs: Provider-specific passthrough.
 
         Yields:
@@ -337,16 +381,21 @@ class VoxClient:
         """
         resolved = resolve_provider(model, provider)
         adapter = self._get_provider(resolved)
-        async for chunk in adapter.astream(
-            messages,
-            model=model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            tools=tools,
-            reasoning=reasoning,
-            stop=stop,
-            **kwargs,
-        ):
+        policy = self._resolve_retry_policy(retry_policy)
+
+        def _open_stream() -> AsyncIterator[StreamChunk]:
+            return adapter.astream(
+                messages,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                tools=tools,
+                reasoning=reasoning,
+                stop=stop,
+                **kwargs,
+            )
+
+        async for chunk in retry_stream_async(_open_stream, policy=policy):
             if chunk.type == "usage":
                 self._populate_cost(chunk.usage, model)
             yield chunk
@@ -361,6 +410,7 @@ class VoxClient:
         provider: str | None = None,
         language: str | None = None,
         prompt: str | None = None,
+        retry_policy: RetryPolicy | None = None,
         **kwargs: Any,
     ) -> TranscriptionResponse:
         """Synchronously transcribe audio to text.
@@ -380,6 +430,7 @@ class VoxClient:
             prompt: Optional bias string. OpenAI Whisper uses it as a
                 vocab-bias prompt; Gemini uses it as the transcription
                 instruction itself (overriding the default).
+            retry_policy: Per-call retry override.
             **kwargs: Provider-specific passthrough.
 
         Returns:
@@ -387,12 +438,16 @@ class VoxClient:
         """
         resolved = resolve_provider(model, provider)
         adapter = self._get_provider(resolved)
-        response = adapter.transcribe(
-            audio,
-            model=model,
-            language=language,
-            prompt=prompt,
-            **kwargs,
+        policy = self._resolve_retry_policy(retry_policy)
+        response = retry_sync(
+            lambda: adapter.transcribe(
+                audio,
+                model=model,
+                language=language,
+                prompt=prompt,
+                **kwargs,
+            ),
+            policy=policy,
         )
         if response.usage is not None:
             self._populate_cost(response.usage, model)
@@ -406,17 +461,22 @@ class VoxClient:
         provider: str | None = None,
         language: str | None = None,
         prompt: str | None = None,
+        retry_policy: RetryPolicy | None = None,
         **kwargs: Any,
     ) -> TranscriptionResponse:
         """Asynchronously transcribe audio to text. See :meth:`transcribe`."""
         resolved = resolve_provider(model, provider)
         adapter = self._get_provider(resolved)
-        response = await adapter.atranscribe(
-            audio,
-            model=model,
-            language=language,
-            prompt=prompt,
-            **kwargs,
+        policy = self._resolve_retry_policy(retry_policy)
+        response = await retry_async(
+            lambda: adapter.atranscribe(
+                audio,
+                model=model,
+                language=language,
+                prompt=prompt,
+                **kwargs,
+            ),
+            policy=policy,
         )
         if response.usage is not None:
             self._populate_cost(response.usage, model)
@@ -432,6 +492,7 @@ class VoxClient:
         format: str | None = None,
         speed: float | None = None,
         instructions: str | None = None,
+        retry_policy: RetryPolicy | None = None,
         **kwargs: Any,
     ) -> AudioContent:
         """Synchronously synthesize text to speech.
@@ -449,6 +510,7 @@ class VoxClient:
             speed: Playback speed (0.25-4.0). OpenAI only.
             instructions: Voice direction prompt (``gpt-4o-mini-tts``
                 and newer only).
+            retry_policy: Per-call retry override.
             **kwargs: Provider-specific passthrough.
 
         Returns:
@@ -456,14 +518,18 @@ class VoxClient:
         """
         resolved = resolve_provider(model, provider)
         adapter = self._get_provider(resolved)
-        return adapter.synthesize(
-            text,
-            voice=voice,
-            model=model,
-            format=format,
-            speed=speed,
-            instructions=instructions,
-            **kwargs,
+        policy = self._resolve_retry_policy(retry_policy)
+        return retry_sync(
+            lambda: adapter.synthesize(
+                text,
+                voice=voice,
+                model=model,
+                format=format,
+                speed=speed,
+                instructions=instructions,
+                **kwargs,
+            ),
+            policy=policy,
         )
 
     async def asynthesize(
@@ -476,17 +542,22 @@ class VoxClient:
         format: str | None = None,
         speed: float | None = None,
         instructions: str | None = None,
+        retry_policy: RetryPolicy | None = None,
         **kwargs: Any,
     ) -> AudioContent:
         """Asynchronously synthesize text to speech. See :meth:`synthesize`."""
         resolved = resolve_provider(model, provider)
         adapter = self._get_provider(resolved)
-        return await adapter.asynthesize(
-            text,
-            voice=voice,
-            model=model,
-            format=format,
-            speed=speed,
-            instructions=instructions,
-            **kwargs,
+        policy = self._resolve_retry_policy(retry_policy)
+        return await retry_async(
+            lambda: adapter.asynthesize(
+                text,
+                voice=voice,
+                model=model,
+                format=format,
+                speed=speed,
+                instructions=instructions,
+                **kwargs,
+            ),
+            policy=policy,
         )
