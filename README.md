@@ -512,6 +512,80 @@ partial stream would surprise the consumer.
 supplied `retry_after`, vox uses that value (capped by `max_delay`)
 instead of the computed backoff.
 
+## Callbacks (Observability Hooks)
+
+Wire telemetry — OpenTelemetry, Langfuse, Helicone, custom logging,
+whatever — without monkey-patching, via the `CallbackHandler`
+protocol. Pass any number of handlers to `VoxClient(callbacks=[...])`
+and vox fires them around every call.
+
+```python
+from vox import CallbackHandler, LoggingHandler, VoxClient
+
+client = VoxClient(
+    callbacks=[LoggingHandler()],   # built-in: logs every call via loguru
+    capture_content=False,          # default: no PII in event payloads
+)
+```
+
+Three events per call lifecycle:
+
+| Event | When | Payload |
+|---|---|---|
+| `on_request(RequestEvent)` | Before the provider call | `model`, `provider`, `method`, `request_kwargs` |
+| `on_response(ResponseEvent)` | After a successful response | `model`, `provider`, `method`, `duration_ms`, `usage`, `response` |
+| `on_error(ErrorEvent)` | After a failed call (post-retry) | `model`, `provider`, `method`, `duration_ms`, `error` |
+
+Custom handlers implement any subset of the methods:
+
+```python
+class CostBudgetTracker:
+    def __init__(self) -> None:
+        self.spend_usd = 0.0
+
+    def on_response(self, event):
+        if event.usage and event.usage.estimated_cost:
+            self.spend_usd += event.usage.estimated_cost
+
+tracker = CostBudgetTracker()
+client = VoxClient(callbacks=[tracker])
+```
+
+### OpenTelemetry without depending on `opentelemetry-api`
+
+Each event ships a `to_otel_attributes()` helper that returns a dict
+keyed by the [OpenTelemetry GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/)
+(`gen_ai.system`, `gen_ai.request.model`, `gen_ai.usage.input_tokens`,
+etc.). Consumers wiring vox into OTel get clean spans with the
+standard attribute names with one line — vox itself stays
+dependency-free.
+
+```python
+from opentelemetry import trace
+
+class OTelHandler:
+    def on_request(self, event):
+        span = trace.get_current_span()
+        span.set_attributes(event.to_otel_attributes())
+
+    def on_response(self, event):
+        span = trace.get_current_span()
+        span.set_attributes(event.to_otel_attributes())
+```
+
+### Behaviour
+
+- **No PII by default.** `request_kwargs` strips `messages` / `audio` /
+  `text` / `prompt`; `response` is set to `None`. Pass
+  `VoxClient(capture_content=True)` to include the full payloads when
+  every handler in the list is trusted with sensitive data.
+- **Handler exceptions are swallowed** at WARNING level via `loguru`.
+  A buggy telemetry handler never breaks the real LLM call.
+- **Async paths use a thread executor.** From `acomplete` / `astream`
+  / `atranscribe` / `asynthesize`, vox dispatches each handler call
+  via `loop.run_in_executor` and returns immediately — a slow handler
+  doing blocking I/O won't stall the response.
+
 ## Error Handling
 
 All provider errors are normalized to a consistent hierarchy:

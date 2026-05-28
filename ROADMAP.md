@@ -98,6 +98,18 @@ analysis pipelines) likely to land on vox before the canonical
   Groq, etc. Add only when a consumer needs one — OpenRouter already covers
   much of this surface.
 
+## Observability — shipped
+
+- ~~**Observability hooks.**~~ Shipped as `CallbackHandler` protocol
+  with three events (`on_request` / `on_response` / `on_error`) +
+  Pydantic event models with `to_otel_attributes()` helpers keyed to
+  the OpenTelemetry GenAI semantic conventions. Built-in
+  `LoggingHandler`. `capture_content=False` default keeps PII out of
+  event payloads. Handler exceptions are swallowed to WARNING. Async
+  paths dispatch via `run_in_executor` (fire-and-forget) so slow
+  telemetry handlers never block the response. See the README
+  "Callbacks (Observability Hooks)" section.
+
 ## Needs a design decision first
 
 - **Optional tool-loop helper.** vox is deliberately low-level: it does one
