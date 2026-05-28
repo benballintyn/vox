@@ -4,6 +4,13 @@ All notable changes to vox are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0](https://github.com/benballintyn/vox/compare/v0.5.0...v0.6.0) (2026-05-28)
+
+
+### Features
+
+* configurable retry policy honoring retry_after ([#42](https://github.com/benballintyn/vox/issues/42)) ([f03e8c8](https://github.com/benballintyn/vox/commit/f03e8c8be7746074e6f3f846d208641ad6b33bdf))
+
 ## [0.5.0](https://github.com/benballintyn/vox/compare/v0.4.0...v0.5.0) (2026-05-27)
 
 
