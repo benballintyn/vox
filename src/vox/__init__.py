@@ -7,6 +7,7 @@ from ._pricing import (
     estimate_cost,
     resolve_pricing,
 )
+from ._retry import RetryPolicy
 from .client import VoxClient
 from .errors import (
     AuthenticationError,
@@ -67,6 +68,7 @@ __all__ = [
     "QuotaExceededError",
     "RateLimitError",
     "ReasoningConfig",
+    "RetryPolicy",
     "StreamChunk",
     "TextContent",
     "ThinkingBlock",
