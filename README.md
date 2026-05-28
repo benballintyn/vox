@@ -468,6 +468,50 @@ Available voices:
 
 Async variants (`atranscribe`, `asynthesize`) mirror the sync API.
 
+## Retries
+
+vox retries transient provider errors automatically. The default policy
+is **3 retries with exponential backoff and jitter**, honouring any
+`retry_after` value the provider returns on a `RateLimitError`.
+
+```python
+from vox import RetryPolicy, VoxClient
+
+client = VoxClient(
+    retry_policy=RetryPolicy(
+        max_retries=5,          # up to 5 retries after the initial call
+        base_delay=1.0,         # first retry waits ~1s, then ~2s, ~4s, ...
+        max_delay=30.0,         # cap any single sleep
+        exponential_factor=2.0,
+        jitter=0.25,            # ±25% randomization to avoid thundering herd
+    )
+)
+```
+
+Per-call override on any method:
+
+```python
+client.complete(
+    messages,
+    model="gpt-5",
+    retry_policy=RetryPolicy(max_retries=0),  # disable retries for this call
+)
+```
+
+**What gets retried.** Only `RateLimitError` and `ProviderError` by
+default — these are the transient-by-nature ones. `InvalidRequestError`,
+`AuthenticationError`, `ContentFilterError`, `ModelNotFoundError`, and
+non-vox exceptions propagate immediately. Customize the whitelist via
+`RetryPolicy(retry_on=(...))`.
+
+**Streaming.** Retries only fire **before the first chunk is yielded**.
+Once data has started arriving, errors propagate as-is — replaying a
+partial stream would surprise the consumer.
+
+**`retry_after` precedence.** When a `RateLimitError` carries a server-
+supplied `retry_after`, vox uses that value (capped by `max_delay`)
+instead of the computed backoff.
+
 ## Callbacks (Observability Hooks)
 
 Wire telemetry — OpenTelemetry, Langfuse, Helicone, custom logging,
