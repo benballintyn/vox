@@ -14,9 +14,17 @@ if TYPE_CHECKING:
 
 from pydantic import BaseModel
 
+from ._callbacks import (
+    CallbackHandler,
+    ErrorEvent,
+    RequestEvent,
+    ResponseEvent,
+    fire_async,
+    fire_sync,
+)
 from ._pricing import ModelPricing, estimate_cost
 from ._registry import resolve_provider
-from .errors import InvalidRequestError
+from .errors import InvalidRequestError, VoxError
 from .models.config import ProviderConfig
 from .models.messages import Message
 from .models.reasoning import ReasoningConfig
@@ -45,6 +53,21 @@ class VoxClient:
             snapshot when computing ``usage.estimated_cost``. Pass a
             ``ModelPricing(...)`` for any model you want priced
             differently (or for models vox doesn't know about at all).
+        callbacks: Optional list of :class:`CallbackHandler` instances
+            that receive ``on_request`` / ``on_response`` / ``on_error``
+            events for every entry-point call. Useful for wiring
+            OpenTelemetry, Langfuse, Helicone, custom logging, etc.
+            Each event ships a ``to_otel_attributes()`` helper for
+            consumers that use OTel. Handlers are called sync from
+            sync paths; async paths dispatch them via
+            ``run_in_executor`` (fire-and-forget) so a slow handler
+            never blocks the response.
+        capture_content: When ``True``, the prompt text / response
+            text / audio data is included in the event payloads
+            (``RequestEvent.request_kwargs`` / ``ResponseEvent.response``).
+            Default ``False`` — no PII in events. Set this only if
+            you trust every handler in ``callbacks`` to handle
+            sensitive data correctly.
     """
 
     def __init__(
@@ -59,6 +82,8 @@ class VoxClient:
         openrouter_app_url: str | None = None,
         provider_configs: dict[str, ProviderConfig] | None = None,
         custom_pricing: dict[str, ModelPricing] | None = None,
+        callbacks: list[CallbackHandler] | None = None,
+        capture_content: bool = False,
     ) -> None:
         self._provider_configs = provider_configs or {}
         self._api_keys = {
@@ -72,6 +97,84 @@ class VoxClient:
         self._openrouter_app_url = openrouter_app_url
         self._providers: dict[str, Provider] = {}
         self._custom_pricing: dict[str, ModelPricing] = custom_pricing or {}
+        self._callbacks: list[CallbackHandler] = callbacks or []
+        self._capture_content = capture_content
+
+    # ── Callback dispatch helpers ───────────────────────────────────────
+
+    def _build_request_kwargs(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        """Strip PII from request kwargs unless ``capture_content=True``.
+
+        Sensitive keys: ``messages``, ``audio``, ``text``, ``prompt``,
+        ``response_schema`` (the schema class itself is fine; the
+        prompt content is what we strip). Structural fields like
+        ``max_tokens`` / ``temperature`` / ``tools`` (names only) pass
+        through.
+        """
+        if self._capture_content:
+            return dict(kwargs)
+        sensitive = {"messages", "audio", "text", "prompt"}
+        return {k: v for k, v in kwargs.items() if k not in sensitive}
+
+    def _fire_request(
+        self, method: str, model: str, provider: str, kwargs: dict[str, Any]
+    ) -> float:
+        """Fire on_request (if any callbacks) and return a start timestamp.
+
+        Returns the ``perf_counter`` value to subtract on response/error
+        for the duration_ms calculation. Caller decides sync vs async
+        dispatch.
+        """
+        import time
+
+        start = time.perf_counter()
+        if self._callbacks:
+            event = RequestEvent(
+                model=model,
+                provider=provider,
+                method=method,  # type: ignore[arg-type]
+                request_kwargs=self._build_request_kwargs(kwargs),
+            )
+            fire_sync(self._callbacks, "on_request", event)
+        return start
+
+    def _make_response_event(
+        self,
+        method: str,
+        model: str,
+        provider: str,
+        start: float,
+        response: Any,
+    ) -> ResponseEvent:
+        import time
+
+        usage = getattr(response, "usage", None)
+        return ResponseEvent(
+            model=model,
+            provider=provider,
+            method=method,  # type: ignore[arg-type]
+            duration_ms=(time.perf_counter() - start) * 1000.0,
+            usage=usage,
+            response=response if self._capture_content else None,
+        )
+
+    def _make_error_event(
+        self,
+        method: str,
+        model: str,
+        provider: str,
+        start: float,
+        error: VoxError,
+    ) -> ErrorEvent:
+        import time
+
+        return ErrorEvent(
+            model=model,
+            provider=provider,
+            method=method,  # type: ignore[arg-type]
+            duration_ms=(time.perf_counter() - start) * 1000.0,
+            error=error,
+        )
 
     def _populate_cost(self, usage: Usage | None, model: str) -> None:
         """Annotate a ``Usage`` in place with ``model`` + ``estimated_cost``.
@@ -198,18 +301,48 @@ class VoxClient:
         """
         resolved = resolve_provider(model, provider)
         adapter = self._get_provider(resolved)
-        response = adapter.complete(
-            messages,
-            model=model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            tools=tools,
-            response_schema=response_schema,
-            reasoning=reasoning,
-            stop=stop,
-            **kwargs,
+        start = self._fire_request(
+            "complete",
+            model,
+            resolved,
+            {
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "tools": tools,
+                "response_schema": response_schema,
+                "reasoning": reasoning,
+                "stop": stop,
+                **kwargs,
+            },
         )
+        try:
+            response = adapter.complete(
+                messages,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                tools=tools,
+                response_schema=response_schema,
+                reasoning=reasoning,
+                stop=stop,
+                **kwargs,
+            )
+        except VoxError as e:
+            if self._callbacks:
+                fire_sync(
+                    self._callbacks,
+                    "on_error",
+                    self._make_error_event("complete", model, resolved, start, e),
+                )
+            raise
         self._populate_cost(response.usage, model)
+        if self._callbacks:
+            fire_sync(
+                self._callbacks,
+                "on_response",
+                self._make_response_event("complete", model, resolved, start, response),
+            )
         return response
 
     async def acomplete(
@@ -245,18 +378,48 @@ class VoxClient:
         """
         resolved = resolve_provider(model, provider)
         adapter = self._get_provider(resolved)
-        response = await adapter.acomplete(
-            messages,
-            model=model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            tools=tools,
-            response_schema=response_schema,
-            reasoning=reasoning,
-            stop=stop,
-            **kwargs,
+        start = self._fire_request(
+            "acomplete",
+            model,
+            resolved,
+            {
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "tools": tools,
+                "response_schema": response_schema,
+                "reasoning": reasoning,
+                "stop": stop,
+                **kwargs,
+            },
         )
+        try:
+            response = await adapter.acomplete(
+                messages,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                tools=tools,
+                response_schema=response_schema,
+                reasoning=reasoning,
+                stop=stop,
+                **kwargs,
+            )
+        except VoxError as e:
+            if self._callbacks:
+                fire_async(
+                    self._callbacks,
+                    "on_error",
+                    self._make_error_event("acomplete", model, resolved, start, e),
+                )
+            raise
         self._populate_cost(response.usage, model)
+        if self._callbacks:
+            fire_async(
+                self._callbacks,
+                "on_response",
+                self._make_response_event("acomplete", model, resolved, start, response),
+            )
         return response
 
     def stream(
@@ -290,21 +453,56 @@ class VoxClient:
         """
         resolved = resolve_provider(model, provider)
         adapter = self._get_provider(resolved)
-        for chunk in adapter.stream(
-            messages,
-            model=model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            tools=tools,
-            reasoning=reasoning,
-            stop=stop,
-            **kwargs,
-        ):
-            # Annotate the usage chunk with model + estimated_cost so
-            # streaming consumers get the same telemetry as non-streamers.
-            if chunk.type == "usage":
-                self._populate_cost(chunk.usage, model)
-            yield chunk
+        start = self._fire_request(
+            "stream",
+            model,
+            resolved,
+            {
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "tools": tools,
+                "reasoning": reasoning,
+                "stop": stop,
+                **kwargs,
+            },
+        )
+        last_usage = None
+        try:
+            for chunk in adapter.stream(
+                messages,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                tools=tools,
+                reasoning=reasoning,
+                stop=stop,
+                **kwargs,
+            ):
+                # Annotate the usage chunk with model + estimated_cost so
+                # streaming consumers get the same telemetry as non-streamers.
+                if chunk.type == "usage":
+                    self._populate_cost(chunk.usage, model)
+                    last_usage = chunk.usage
+                yield chunk
+        except VoxError as e:
+            if self._callbacks:
+                fire_sync(
+                    self._callbacks,
+                    "on_error",
+                    self._make_error_event("stream", model, resolved, start, e),
+                )
+            raise
+        if self._callbacks:
+            # Synthesize a response-shaped object so the event carries usage.
+            class _StreamSummary:
+                usage = last_usage
+
+            fire_sync(
+                self._callbacks,
+                "on_response",
+                self._make_response_event("stream", model, resolved, start, _StreamSummary()),
+            )
 
     async def astream(
         self,
@@ -337,19 +535,54 @@ class VoxClient:
         """
         resolved = resolve_provider(model, provider)
         adapter = self._get_provider(resolved)
-        async for chunk in adapter.astream(
-            messages,
-            model=model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            tools=tools,
-            reasoning=reasoning,
-            stop=stop,
-            **kwargs,
-        ):
-            if chunk.type == "usage":
-                self._populate_cost(chunk.usage, model)
-            yield chunk
+        start = self._fire_request(
+            "astream",
+            model,
+            resolved,
+            {
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "tools": tools,
+                "reasoning": reasoning,
+                "stop": stop,
+                **kwargs,
+            },
+        )
+        last_usage = None
+        try:
+            async for chunk in adapter.astream(
+                messages,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                tools=tools,
+                reasoning=reasoning,
+                stop=stop,
+                **kwargs,
+            ):
+                if chunk.type == "usage":
+                    self._populate_cost(chunk.usage, model)
+                    last_usage = chunk.usage
+                yield chunk
+        except VoxError as e:
+            if self._callbacks:
+                fire_async(
+                    self._callbacks,
+                    "on_error",
+                    self._make_error_event("astream", model, resolved, start, e),
+                )
+            raise
+        if self._callbacks:
+
+            class _StreamSummary:
+                usage = last_usage
+
+            fire_async(
+                self._callbacks,
+                "on_response",
+                self._make_response_event("astream", model, resolved, start, _StreamSummary()),
+            )
 
     # ── Audio: transcribe + synthesize ────────────────────────────────
 
@@ -387,15 +620,36 @@ class VoxClient:
         """
         resolved = resolve_provider(model, provider)
         adapter = self._get_provider(resolved)
-        response = adapter.transcribe(
-            audio,
-            model=model,
-            language=language,
-            prompt=prompt,
-            **kwargs,
+        start = self._fire_request(
+            "transcribe",
+            model,
+            resolved,
+            {"audio": audio, "language": language, "prompt": prompt, **kwargs},
         )
+        try:
+            response = adapter.transcribe(
+                audio,
+                model=model,
+                language=language,
+                prompt=prompt,
+                **kwargs,
+            )
+        except VoxError as e:
+            if self._callbacks:
+                fire_sync(
+                    self._callbacks,
+                    "on_error",
+                    self._make_error_event("transcribe", model, resolved, start, e),
+                )
+            raise
         if response.usage is not None:
             self._populate_cost(response.usage, model)
+        if self._callbacks:
+            fire_sync(
+                self._callbacks,
+                "on_response",
+                self._make_response_event("transcribe", model, resolved, start, response),
+            )
         return response
 
     async def atranscribe(
@@ -411,15 +665,36 @@ class VoxClient:
         """Asynchronously transcribe audio to text. See :meth:`transcribe`."""
         resolved = resolve_provider(model, provider)
         adapter = self._get_provider(resolved)
-        response = await adapter.atranscribe(
-            audio,
-            model=model,
-            language=language,
-            prompt=prompt,
-            **kwargs,
+        start = self._fire_request(
+            "atranscribe",
+            model,
+            resolved,
+            {"audio": audio, "language": language, "prompt": prompt, **kwargs},
         )
+        try:
+            response = await adapter.atranscribe(
+                audio,
+                model=model,
+                language=language,
+                prompt=prompt,
+                **kwargs,
+            )
+        except VoxError as e:
+            if self._callbacks:
+                fire_async(
+                    self._callbacks,
+                    "on_error",
+                    self._make_error_event("atranscribe", model, resolved, start, e),
+                )
+            raise
         if response.usage is not None:
             self._populate_cost(response.usage, model)
+        if self._callbacks:
+            fire_async(
+                self._callbacks,
+                "on_response",
+                self._make_response_event("atranscribe", model, resolved, start, response),
+            )
         return response
 
     def synthesize(
@@ -456,15 +731,44 @@ class VoxClient:
         """
         resolved = resolve_provider(model, provider)
         adapter = self._get_provider(resolved)
-        return adapter.synthesize(
-            text,
-            voice=voice,
-            model=model,
-            format=format,
-            speed=speed,
-            instructions=instructions,
-            **kwargs,
+        start = self._fire_request(
+            "synthesize",
+            model,
+            resolved,
+            {
+                "text": text,
+                "voice": voice,
+                "format": format,
+                "speed": speed,
+                "instructions": instructions,
+                **kwargs,
+            },
         )
+        try:
+            audio = adapter.synthesize(
+                text,
+                voice=voice,
+                model=model,
+                format=format,
+                speed=speed,
+                instructions=instructions,
+                **kwargs,
+            )
+        except VoxError as e:
+            if self._callbacks:
+                fire_sync(
+                    self._callbacks,
+                    "on_error",
+                    self._make_error_event("synthesize", model, resolved, start, e),
+                )
+            raise
+        if self._callbacks:
+            fire_sync(
+                self._callbacks,
+                "on_response",
+                self._make_response_event("synthesize", model, resolved, start, audio),
+            )
+        return audio
 
     async def asynthesize(
         self,
@@ -481,12 +785,41 @@ class VoxClient:
         """Asynchronously synthesize text to speech. See :meth:`synthesize`."""
         resolved = resolve_provider(model, provider)
         adapter = self._get_provider(resolved)
-        return await adapter.asynthesize(
-            text,
-            voice=voice,
-            model=model,
-            format=format,
-            speed=speed,
-            instructions=instructions,
-            **kwargs,
+        start = self._fire_request(
+            "asynthesize",
+            model,
+            resolved,
+            {
+                "text": text,
+                "voice": voice,
+                "format": format,
+                "speed": speed,
+                "instructions": instructions,
+                **kwargs,
+            },
         )
+        try:
+            audio = await adapter.asynthesize(
+                text,
+                voice=voice,
+                model=model,
+                format=format,
+                speed=speed,
+                instructions=instructions,
+                **kwargs,
+            )
+        except VoxError as e:
+            if self._callbacks:
+                fire_async(
+                    self._callbacks,
+                    "on_error",
+                    self._make_error_event("asynthesize", model, resolved, start, e),
+                )
+            raise
+        if self._callbacks:
+            fire_async(
+                self._callbacks,
+                "on_response",
+                self._make_response_event("asynthesize", model, resolved, start, audio),
+            )
+        return audio

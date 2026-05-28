@@ -1,5 +1,12 @@
 """Vox — Model-agnostic LLM execution library."""
 
+from ._callbacks import (
+    CallbackHandler,
+    ErrorEvent,
+    LoggingHandler,
+    RequestEvent,
+    ResponseEvent,
+)
 from ._pricing import (
     MODEL_PRICING,
     PRICING_SNAPSHOT_DATE,
@@ -51,13 +58,16 @@ __all__ = [
     "AnthropicReasoning",
     "AudioContent",
     "AuthenticationError",
+    "CallbackHandler",
     "CompletionResponse",
     "ContentFilterError",
     "ContentPart",
+    "ErrorEvent",
     "FinishReason",
     "GeminiReasoning",
     "ImageContent",
     "InvalidRequestError",
+    "LoggingHandler",
     "Message",
     "ModelNotFoundError",
     "ModelPricing",
@@ -67,6 +77,8 @@ __all__ = [
     "QuotaExceededError",
     "RateLimitError",
     "ReasoningConfig",
+    "RequestEvent",
+    "ResponseEvent",
     "StreamChunk",
     "TextContent",
     "ThinkingBlock",
