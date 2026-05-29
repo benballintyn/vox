@@ -13,6 +13,8 @@ Model-agnostic LLM execution library for Python. One interface, every provider.
 
 Write your code once and run it against OpenAI, Anthropic, Google Gemini, OpenRouter, or local models via LM Studio — with streaming, tool use, structured output, and reasoning support out of the box.
 
+**📖 Documentation:** [benballintyn.github.io/vox](https://benballintyn.github.io/vox/) — guides, API reference, and examples.
+
 ## Installation
 
 ```bash

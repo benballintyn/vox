@@ -45,3 +45,6 @@ dmypy.json
 .pytype/
 cython_debug/
 .ruff_cache/
+
+# mkdocs build output
+site/
