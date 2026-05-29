@@ -1,0 +1,128 @@
+site_name: vox
+site_description: Model-agnostic LLM execution library for Python. One interface, every provider.
+site_url: https://benballintyn.github.io/vox/
+repo_url: https://github.com/benballintyn/vox
+repo_name: benballintyn/vox
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    # Light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to dark mode
+    # Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.expand
+    - navigation.path
+    - navigation.top
+    - navigation.footer
+    - toc.follow
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - content.action.edit
+    - search.highlight
+    - search.suggest
+    - search.share
+  icon:
+    repo: fontawesome/brands/github
+  font:
+    text: Inter
+    code: JetBrains Mono
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: google
+            show_source: true
+            show_root_heading: true
+            show_root_full_path: false
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            members_order: source
+            separate_signature: true
+            show_signature_annotations: true
+            signature_crossrefs: true
+            merge_init_into_class: true
+            docstring_section_style: table
+            heading_level: 2
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.betterem
+  - pymdownx.caret
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.mark
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.tilde
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/benballintyn/vox
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/p/vox-llm
+  generator: false
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Guides:
+      - Streaming: guides/streaming.md
+      - Tool Use: guides/tools.md
+      - Structured Output: guides/structured-output.md
+      - Multimodal (Vision + Video): guides/multimodal.md
+      - Audio I/O: guides/audio.md
+      - Reliability (Retries + Callbacks): guides/reliability.md
+      - Cost Estimation: guides/cost.md
+      - Error Handling: guides/errors.md
+  - API Reference:
+      - VoxClient: reference/client.md
+      - Messages & Content: reference/messages.md
+      - Responses: reference/responses.md
+      - Tools: reference/tools.md
+      - Reasoning: reference/reasoning.md
+      - Retries: reference/retries.md
+      - Callbacks: reference/callbacks.md
+      - Errors: reference/errors.md
+      - Pricing: reference/pricing.md
+  - Roadmap: roadmap.md

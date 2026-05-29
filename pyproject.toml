@@ -73,6 +73,16 @@ mypy = "^2.1.0"
 # `vox-llm[video]` extra.
 imageio = {extras = ["ffmpeg"], version = ">=2.34"}
 
+# Documentation site (mkdocs-material + mkdocstrings). Optional group
+# so the dev install stays lean; the GitHub Pages build workflow
+# installs this group explicitly.
+[tool.poetry.group.docs]
+optional = true
+
+[tool.poetry.group.docs.dependencies]
+mkdocs-material = "^9.7"
+mkdocstrings = {extras = ["python"], version = "^1.0"}
+
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"

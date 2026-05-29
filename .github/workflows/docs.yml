@@ -1,0 +1,68 @@
+name: Deploy docs
+
+# Builds the mkdocs-material site and publishes it to GitHub Pages.
+# Runs on every push to main and on manual dispatch.
+#
+# One-time repo setting: Settings → Pages → Source: "GitHub Actions".
+# Without this, the deploy step has nowhere to push and fails.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "src/vox/**"             # API ref auto-extracts from docstrings
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+# Concurrency: cancel any in-flight deploy when a new push lands.
+concurrency:
+  group: docs-deploy
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        run: pipx install poetry
+
+      - name: Install docs dependencies
+        # Only the `docs` group; no provider SDKs or test tools needed
+        # to render the site. mkdocstrings introspects docstrings from
+        # source, not from an installed package, so `--no-root` is fine.
+        run: poetry install --only docs --no-interaction
+
+      - name: Build site
+        run: poetry run mkdocs build
+
+      - name: Upload pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: site/
+
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
