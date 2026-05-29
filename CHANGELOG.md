@@ -4,6 +4,15 @@ All notable changes to vox are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1](https://github.com/benballintyn/vox/compare/v0.6.0...v0.6.1) (2026-05-29)
+
+
+### Documentation
+
+* add mkdocs-material documentation site ([#49](https://github.com/benballintyn/vox/issues/49)) ([6befe05](https://github.com/benballintyn/vox/commit/6befe05ddc5f29f8dc52ae1faaa8229346f3c0e4))
+* **handoff:** refresh for v0.6.0 state ([#48](https://github.com/benballintyn/vox/issues/48)) ([d0d196d](https://github.com/benballintyn/vox/commit/d0d196dc7e8c790cde790ecfb474e2c4de5dab9c))
+* **readme:** add status badges ([#46](https://github.com/benballintyn/vox/issues/46)) ([083ce3b](https://github.com/benballintyn/vox/commit/083ce3b9c3a03177d8d9c67788597f213722a069))
+
 ## [0.6.0](https://github.com/benballintyn/vox/compare/v0.5.0...v0.6.0) (2026-05-28)
 
 
