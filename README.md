@@ -1,5 +1,14 @@
 # vox
 
+[![PyPI](https://img.shields.io/pypi/v/vox-llm.svg)](https://pypi.org/p/vox-llm)
+[![Python](https://img.shields.io/pypi/pyversions/vox-llm.svg)](https://pypi.org/p/vox-llm)
+[![License](https://img.shields.io/pypi/l/vox-llm.svg)](https://github.com/benballintyn/vox/blob/main/LICENSE)
+[![Tests](https://github.com/benballintyn/vox/actions/workflows/run_tests.yml/badge.svg)](https://github.com/benballintyn/vox/actions/workflows/run_tests.yml)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![mypy](https://img.shields.io/badge/types-mypy-blue.svg)](https://mypy-lang.org/)
+[![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit&logoColor=white)](https://github.com/pre-commit/pre-commit)
+[![Downloads](https://img.shields.io/pypi/dm/vox-llm.svg)](https://pypi.org/p/vox-llm)
+
 Model-agnostic LLM execution library for Python. One interface, every provider.
 
 Write your code once and run it against OpenAI, Anthropic, Google Gemini, OpenRouter, or local models via LM Studio — with streaming, tool use, structured output, and reasoning support out of the box.
