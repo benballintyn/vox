@@ -3,7 +3,7 @@
 # (`from vox import ...`) — only `pip install` uses the distribution name.
 # Renamed from "vox" because that name was already taken on PyPI.
 name = "vox-llm"
-version = "0.6.0"
+version = "0.6.1"
 description = "Model-agnostic LLM execution library"
 authors = [
     {name = "Ben Ballintyn", email = "benballintyn@gmail.com"}
