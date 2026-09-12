@@ -222,7 +222,8 @@ class TestReasoningConfig:
             stop=None,
         )
         assert "thinking" not in request
-        assert request["temperature"] == 0.7
+        assert request["extra_body"]["temperature"] == 0.7
+        assert "temperature" not in request
 
 
 class TestComplete:

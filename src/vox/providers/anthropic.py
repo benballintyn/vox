@@ -347,6 +347,16 @@ class AnthropicProvider(Provider):
             request["stop_sequences"] = stop
 
         request.update(kwargs)
+        # anthropic>=1 removed top-level sampling kwargs from the Python
+        # method signature while the Messages API still accepts them on the
+        # wire. `extra_body` is the SDK's forward-compatible escape hatch.
+        # Copy the caller mapping and let its explicit values win.
+        extra_body = dict(request.pop("extra_body", {}) or {})
+        for key in ("temperature", "top_p", "top_k"):
+            if key in request:
+                extra_body.setdefault(key, request.pop(key))
+        if extra_body:
+            request["extra_body"] = extra_body
         return request
 
     # ── Response translation ─────────────────────────────────────────────
