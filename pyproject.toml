@@ -72,6 +72,7 @@ mypy = "^2.1.0"
 # in src/vox/_video.py — same package end users install via the
 # `vox-llm[video]` extra.
 imageio = {extras = ["ffmpeg"], version = ">=2.34"}
+httpx2 = "2.12.0"
 
 # Documentation site (mkdocs-material + mkdocstrings). Optional group
 # so the dev install stays lean; the GitHub Pages build workflow
